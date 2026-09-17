@@ -177,21 +177,26 @@ final class MenuBarManager: ObservableObject {
             }
             let generation = nativeVisibilityGeneration
             let isUserInitiated = lastUserToggleTimestamp.map { $0.duration(to: .now) < .seconds(3) } ?? false
+            // Without a notch, Ice's button carries the concealment itself and
+            // no boundary needs aligning (see usesButtonOnlyConcealment).
+            let buttonOnly = MacOS27NativeMenuBarHiding.usesButtonOnlyConcealment(on: screen)
             // After an automatic attempt couldn't align the boundary without a
             // drag, wait for the user instead of republishing the handle on
             // every cache refresh.
-            guard isUserInitiated || !needsUserActionToAlignBoundary else {
+            guard buttonOnly || isUserInitiated || !needsUserActionToAlignBoundary else {
                 logNativeVisibilityDecision("waiting for a user action to align Ice's boundary")
                 return
             }
-            nativeHiding.prepareForHiding(anchorPosition: controlPosition)
-            logNativeVisibilityDecision("hiding: checking Ice's boundary (user initiated: \(isUserInitiated))")
+            if !buttonOnly { nativeHiding.prepareForHiding(anchorPosition: controlPosition) }
+            logNativeVisibilityDecision(buttonOnly
+                ? "hiding: button-only concealment (no notch)"
+                : "hiding: checking Ice's boundary (user initiated: \(isUserInitiated))")
             nativeConcealmentTask = Task { [weak self] in
                 guard let self else { return }
                 // No mouse monitor: only an explicit request to hide reaches
                 // this check. Moving our blank boundary leaves every other
                 // app's native input and the user's new order untouched.
-                let aligned = await appState.itemManager.alignNativeHidingBoundary(
+                let aligned = buttonOnly ? true : await appState.itemManager.alignNativeHidingBoundary(
                     updatingCache: true,
                     displayID: screen.displayID,
                     allowingDrag: isUserInitiated
@@ -267,12 +272,20 @@ final class MenuBarManager: ObservableObject {
         nativeConcealmentCheckTask = Task { [weak self] in
             // Accessibility can briefly report no settled frame while hosted
             // variants update, so only a repeated miss counts as a failure.
-            for _ in 0 ..< 4 {
+            let buttonOnly = MacOS27NativeMenuBarHiding.usesButtonOnlyConcealment(on: screen)
+            for attempt in 0 ..< (buttonOnly ? 12 : 4) {
                 do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
                 guard let self, macOS27Controller.isConcealingItems else { return }
                 if isIceButtonOnBar(screen: screen) {
                     await shrinkConcealingSpacerUntilDrawn(screen: screen)
                     return
+                }
+                // Button-only: a padded button MenuBarAgent won't fit is
+                // discarded, and with it the only way to click Ice. Narrow
+                // the padding before giving up.
+                if buttonOnly, attempt >= 2, attempt % 2 == 0 {
+                    guard nativeHiding.shrinkConcealingSpacer(section: .hidden) != nil else { break }
+                    lastNativeConcealmentChange = .now
                 }
             }
             guard let self, !Task.isCancelled, macOS27Controller.isConcealingItems else { return }
@@ -327,6 +340,9 @@ final class MenuBarManager: ObservableObject {
     /// sync that restarts the concealment check doesn't cancel it midway.
     @available(macOS 27.0, *)
     private func scheduleStragglerCheck(screen: NSScreen) {
+        // Button-only concealment has no spacer and nothing can sort between
+        // Ice's button and what it hides.
+        guard !MacOS27NativeMenuBarHiding.usesButtonOnlyConcealment(on: screen) else { return }
         stragglerCheckTask?.cancel()
         stragglerCheckTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(700)) } catch { return }
@@ -395,6 +411,11 @@ final class MenuBarManager: ObservableObject {
         let display = CGDisplayBounds(screen.displayID)
         let strip = CGRect(x: display.minX, y: display.minY, width: display.width, height: 40)
         let items = MacOS27MenuBarItemProvider.ownMenuBarItems()
+        if MacOS27NativeMenuBarHiding.usesButtonOnlyConcealment(on: screen) {
+            // The padded button reports its full width through Accessibility.
+            guard let ice = items.first(matching: .visibleControlItem) else { return false }
+            return strip.contains(ice.bounds) && ice.bounds.width >= nativeHiding.buttonConcealment + 20
+        }
         guard let spacer = items.first(matching: .nativeBoundary(for: .hidden)) else { return false }
         return strip.contains(spacer.bounds) && spacer.bounds.width > 8
     }

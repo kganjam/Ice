@@ -25,6 +25,8 @@ final class MacOS27NativeMenuBarHiding {
     var extraConcealmentHandler: ((CGFloat) -> Void)?
     /// The extra width currently requested through `extraConcealmentHandler`.
     private var extraConcealment: CGFloat = 0
+    /// The blank leading width currently requested for Ice's button.
+    var buttonConcealment: CGFloat { extraConcealment }
     /// A length MenuBarAgent refused to draw on this machine, learned from
     /// `shrinkConcealingSpacer`. Caps later sizing so the spacer isn't
     /// re-grown past it on the next refresh.
@@ -50,8 +52,14 @@ final class MacOS27NativeMenuBarHiding {
 
     /// The total concealing length a section currently publishes.
     private func concealingTotal(for section: MenuBarSection.Name) -> CGFloat {
-        guard let spacer = spacers[section], isConcealing(section) else { return 0 }
-        return spacer.item.length + (section == .hidden ? extraConcealment : 0)
+        guard isConcealing(section) else { return 0 }
+        let spacerLength: CGFloat
+        if let spacer = spacers[section], spacer.item.isVisible, spacer.item.length > 1 {
+            spacerLength = spacer.item.length
+        } else {
+            spacerLength = 0
+        }
+        return spacerLength + (section == .hidden ? extraConcealment : 0)
     }
 
     /// The left edge Ice's button would have without its concealment padding.
@@ -68,19 +76,45 @@ final class MacOS27NativeMenuBarHiding {
         extraConcealmentHandler?(extra)
     }
 
-    /// The widest status item MenuBarAgent draws on macOS 27.
+    /// An upper bound for one concealing item's length.
     ///
-    /// Measured with a probe item on 27.0: on a 2304-pt bar, 1130 pt was
-    /// drawn and 1153 pt discarded, in two different layouts (738 pt and
-    /// 551 pt of items to the probe's right), so the limit is half the bar
-    /// width rather than the free space. A wider item is dropped silently.
+    /// The real limit is MenuBarAgent's fit rule (probe on 27.0, 2304-pt
+    /// bar: an item is drawn only if menus + « + item + everything to its
+    /// right fits, with 43–73 pt of overhead; wider items are dropped
+    /// silently), which depends on the live layout. `concealingLength`
+    /// already targets that, and `shrinkConcealingSpacer` backs off when a
+    /// length is still refused, so this only guards against absurd values.
     static func maximumItemLength(on screen: NSScreen) -> CGFloat {
-        (screen.frame.width / 2).rounded(.down) - 8
+        // Half the bar, minus the item's own ~10 pt of internal padding and
+        // slack: 1135 pt drawn and 1183 refused on a 2304-pt bar.
+        (screen.frame.width / 2).rounded(.down) - 24
     }
 
     func isConcealing(_ section: MenuBarSection.Name) -> Bool {
+        if section == .hidden, extraConcealment > 0 { return true }
         guard let spacer = spacers[section] else { return false }
         return spacer.item.isVisible && spacer.item.length > 1
+    }
+
+    /// Whether concealment on this screen is carried by Ice's button alone.
+    ///
+    /// MenuBarAgent overflows leftmost-first, live, from the total width
+    /// (verified: items return the moment a probe item shrinks). A spacer
+    /// therefore never pushes out an item that sorts between it and Ice's
+    /// button, and an item whose owner has no AXExtrasMenuBar can sit there
+    /// unseen. Ice's button is right of everything it hides, so on a bar
+    /// without a notch the button's own leading padding is the concealer.
+    /// A notch changes the rules (items that don't fit right of it move to
+    /// its left), which the spacer logic handles; keep it there.
+    ///
+    /// Dormant: MenuBarAgent also caps any one item at half the bar width
+    /// (padding included: 1135 pt drawn, 1183 refused on 2304 pt), so the
+    /// button alone falls ~240 pt short under an app with short menus and
+    /// six items stay visible. The spacer + button split covers the full
+    /// length; the unseen-item ordering it depends on is fixed once by a
+    /// Command-drag of that item to the left of Ice's boundary.
+    static func usesButtonOnlyConcealment(on screen: NSScreen) -> Bool {
+        false
     }
 
     func prepare(section: MenuBarSection.Name, anchorPosition: CGFloat) {
@@ -163,8 +197,14 @@ final class MacOS27NativeMenuBarHiding {
             return
         }
 
-        prepare(section: section, anchorPosition: anchorPosition)
-        guard let spacer = spacers[section] else { return }
+        let buttonOnly = section == .hidden && Self.usesButtonOnlyConcealment(on: screen)
+        if buttonOnly {
+            // The spacer would sort left of unseen items; keep it withdrawn.
+            if let spacer = spacers[section] { withdraw(spacer.item) }
+        } else {
+            prepare(section: section, anchorPosition: anchorPosition)
+        }
+        guard buttonOnly || spacers[section] != nil else { return }
 
         let length: CGFloat
         if let controlFrame {
@@ -173,9 +213,12 @@ final class MacOS27NativeMenuBarHiding {
                 screen: screen,
                 applicationMenuMaxX: Self.applicationMenuMaxX(on: screen)
             )
-        } else if spacer.item.isVisible, spacer.item.length > 1 {
+        } else if isConcealing(section) {
             // Without a fresh frame, keep the length that is already concealing.
             length = concealingTotal(for: section)
+        } else if buttonOnly {
+            // No frame yet: start modestly; the re-fit corrects it.
+            length = 32
         } else {
             // An item wider than the entire native status region is discarded on
             // macOS 27. A width within that region makes its left neighbors overflow.
@@ -198,9 +241,16 @@ final class MacOS27NativeMenuBarHiding {
         screen: NSScreen,
         controlFrame: CGRect?
     ) {
-        guard let spacer = spacers[section] else { return }
         lastComputedLength[section] = total
         let cap = min(Self.maximumItemLength(on: screen), observedMaximumLength ?? .infinity)
+
+        if section == .hidden, Self.usesButtonOnlyConcealment(on: screen) {
+            logger.notice("Sizing button-only concealment to \(min(total, cap)) of \(total) needed, cap \(cap) (control frame: \(controlFrame?.debugDescription ?? "unknown", privacy: .public))")
+            setExtraConcealment(max(0, min(total, cap)))
+            return
+        }
+
+        guard let spacer = spacers[section] else { return }
         let primary = max(1, min(total, cap))
         let remainder = total - primary
 
@@ -234,11 +284,18 @@ final class MacOS27NativeMenuBarHiding {
         controlFrame: CGRect,
         tolerance: CGFloat = 4
     ) -> Bool {
-        guard spacers[section] != nil, isConcealing(section) else { return false }
+        guard isConcealing(section) else { return false }
+        // During an app switch the new frontmost app's menu bar can be
+        // unreadable for a moment; sizing as if the menus had zero width
+        // would demand ~1700 pt and thrash. Keep the current length instead.
+        guard let applicationMenuMaxX = Self.applicationMenuMaxX(on: screen) else {
+            logger.notice("Not re-fitting \(section.rawValue, privacy: .public): the app menu extent is unavailable")
+            return false
+        }
         let length = Self.concealingLength(
             controlMinX: unpaddedControlMinX(controlFrame, section: section),
             screen: screen,
-            applicationMenuMaxX: Self.applicationMenuMaxX(on: screen)
+            applicationMenuMaxX: applicationMenuMaxX
         )
         let current = lastComputedLength[section] ?? concealingTotal(for: section)
         guard abs(length - current) > tolerance else { return false }
@@ -274,6 +331,15 @@ final class MacOS27NativeMenuBarHiding {
     /// Returns the new length, or `nil` once it is already at `minimum`.
     @available(macOS 27.0, *)
     func shrinkConcealingSpacer(section: MenuBarSection.Name, by step: CGFloat = 48, minimum: CGFloat = 32) -> CGFloat? {
+        if section == .hidden, extraConcealment > 0, spacers[section].map({ !$0.item.isVisible || $0.item.length <= 1 }) ?? true {
+            // Button-only concealment: the padded button was not drawn.
+            guard extraConcealment > minimum else { return nil }
+            let padding = max(minimum, extraConcealment - step)
+            logger.notice("Shrinking button-only concealment from \(self.extraConcealment) to \(padding): MenuBarAgent did not draw Ice's button")
+            observedMaximumLength = padding
+            setExtraConcealment(padding)
+            return padding
+        }
         guard let spacer = spacers[section], isConcealing(section), spacer.item.length > minimum else { return nil }
         let length = max(minimum, spacer.item.length - step)
         logger.notice("Shrinking \(section.rawValue, privacy: .public) spacer from \(spacer.item.length) to \(length): MenuBarAgent did not draw it")
