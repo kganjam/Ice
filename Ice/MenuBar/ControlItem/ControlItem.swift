@@ -357,6 +357,15 @@ final class ControlItem {
         cancellables = c
     }
 
+    /// Extra blank width drawn to the left of the visible item's glyph on
+    /// macOS 27, requested by the native hiding code when the hidden
+    /// section's spacer alone cannot fill the space left of Ice's button.
+    var leadingConcealmentPadding: CGFloat = 0 {
+        didSet {
+            if leadingConcealmentPadding != oldValue { updateStatusItem() }
+        }
+    }
+
     /// Updates the appearance of the status item using the current hiding state.
     private func updateStatusItem() {
         guard
@@ -407,6 +416,20 @@ final class ControlItem {
                 let ratio = max(originalWidth / 25, originalHeight / 17)
                 let newSize = CGSize(width: originalWidth / ratio, height: originalHeight / ratio)
                 image = originalImage.resized(to: newSize)
+            }
+
+            if #available(macOS 27.0, *), leadingConcealmentPadding > 0, let glyph = image {
+                // Blank width to the left of the glyph, so the button itself
+                // covers the part of the hidden section's gap that its spacer
+                // (capped at half the bar) cannot. See MacOS27NativeMenuBarHiding.
+                let padding = leadingConcealmentPadding
+                let size = CGSize(width: glyph.size.width + padding, height: glyph.size.height)
+                let padded = NSImage(size: size, flipped: false) { _ in
+                    glyph.draw(in: CGRect(x: padding, y: 0, width: glyph.size.width, height: glyph.size.height))
+                    return true
+                }
+                padded.isTemplate = glyph.isTemplate
+                image = padded
             }
 
             button.image = image

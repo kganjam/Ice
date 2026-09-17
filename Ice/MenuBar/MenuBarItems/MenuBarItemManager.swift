@@ -442,7 +442,16 @@ extension MenuBarItemManager {
         let destination = MoveDestination.leftOfItem(ice)
         let order = snapshot.sorted { $0.bounds.minX < $1.bounds.minX }.map(\.tag)
         logger.notice("Preparing native boundary \(boundary.bounds.debugDescription, privacy: .public) beside Ice \(ice.bounds.debugDescription, privacy: .public)")
-        if !MacOS27NativeBoundary.isImmediatelyBefore(boundary.tag, ice.tag, in: order) {
+        // An item whose owner exposes no AXExtrasMenuBar (seen: a three-keys
+        // glyph next to Ice) is absent from the snapshot, so the tag order can
+        // call the boundary adjacent while that item sits between it and Ice's
+        // button; it then stays drawn in the hole after the spacer widens. A
+        // pixel gap wider than a few points means something unseen is there.
+        let pixelGap = ice.bounds.minX - boundary.bounds.maxX
+        if pixelGap > 8 {
+            logger.notice("An unenumerated item occupies \(pixelGap) pt between Ice's boundary and its button")
+        }
+        if !MacOS27NativeBoundary.isImmediatelyBefore(boundary.tag, ice.tag, in: order) || pixelGap > 8 {
             // Never take over the pointer without an explicit user action.
             guard allowingDrag else {
                 logger.notice("Not dragging Ice's boundary without a user action")

@@ -55,6 +55,7 @@ final class MenuBarManager: ObservableObject {
     private let nativeHiding = MacOS27NativeMenuBarHiding()
     private var nativeConcealmentTask: Task<Void, Never>?
     private var nativeConcealmentCheckTask: Task<Void, Never>?
+    private var stragglerCheckTask: Task<Void, Never>?
     private var lastNativeVisibilityDecision: String?
     /// The time of the last change to which items the spacers conceal.
     private var lastNativeConcealmentChange: ContinuousClock.Instant?
@@ -100,6 +101,9 @@ final class MenuBarManager: ObservableObject {
         }
         if #available(macOS 27.0, *) {
             nativeHiding.prepare(section: .hidden, anchorPosition: controlItem(withName: .visible)?.preferredPosition ?? 0)
+            nativeHiding.extraConcealmentHandler = { [weak self] extra in
+                self?.controlItem(withName: .visible)?.leadingConcealmentPadding = extra
+            }
         }
     }
 
@@ -248,6 +252,8 @@ final class MenuBarManager: ObservableObject {
         )
         if macOS27Controller.isConcealingItems, !wasConcealing {
             scheduleNativeConcealmentCheck(screen: screen)
+        } else if macOS27Controller.isConcealingItems, nativeConcealmentCheckTask == nil {
+            scheduleStragglerCheck(screen: screen)
         }
     }
 
@@ -264,7 +270,10 @@ final class MenuBarManager: ObservableObject {
             for _ in 0 ..< 4 {
                 do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
                 guard let self, macOS27Controller.isConcealingItems else { return }
-                if isIceButtonOnBar(screen: screen) { return }
+                if isIceButtonOnBar(screen: screen) {
+                    await shrinkConcealingSpacerUntilDrawn(screen: screen)
+                    return
+                }
             }
             guard let self, !Task.isCancelled, macOS27Controller.isConcealingItems else { return }
             logger.error("Ice's button left the menu bar after hiding; showing all items")
@@ -275,6 +284,119 @@ final class MenuBarManager: ObservableObject {
             macOS27Controller.isConcealingItems = false
             for section in sections { section.controlItem.state = .showSection }
         }
+    }
+
+    /// A spacer wider than MenuBarAgent can fit (after overflowing everything
+    /// to its left) is discarded rather than drawn, and then conceals nothing.
+    /// The computed length already leaves a margin for the « button, but the
+    /// exact limit isn't published, so verify through Accessibility that the
+    /// spacer is actually on the bar and narrow it in steps until it is.
+    @available(macOS 27.0, *)
+    private func shrinkConcealingSpacerUntilDrawn(screen: NSScreen) async {
+        var didShrink = false
+        defer {
+            // A shrink shortens the primary item; re-fit so the extension
+            // item picks up what was removed and the gap stays covered.
+            if didShrink { refreshNativeConcealmentLength() }
+        }
+        for _ in 0 ..< 8 {
+            guard macOS27Controller.isConcealingItems, !Task.isCancelled else { return }
+            // MenuBarAgent animates the reflow; a frame can be missing for a
+            // moment after a resize. Only a repeated miss means "discarded".
+            var drawn = false
+            for _ in 0 ..< 3 {
+                if isConcealingSpacerDrawn(screen: screen) { drawn = true; break }
+                do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+                guard macOS27Controller.isConcealingItems, !Task.isCancelled else { return }
+            }
+            if drawn {
+                scheduleStragglerCheck(screen: screen)
+                return
+            }
+            guard nativeHiding.shrinkConcealingSpacer(section: .hidden) != nil else {
+                logger.error("The concealing spacer is at its minimum length and still not drawn")
+                return
+            }
+            didShrink = true
+            lastNativeConcealmentChange = .now
+            do { try await Task.sleep(for: .milliseconds(450)) } catch { return }
+        }
+    }
+
+    /// Runs the straggler check in its own task, so a concurrent visibility
+    /// sync that restarts the concealment check doesn't cancel it midway.
+    @available(macOS 27.0, *)
+    private func scheduleStragglerCheck(screen: NSScreen) {
+        stragglerCheckTask?.cancel()
+        stragglerCheckTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(700)) } catch { return }
+            guard let self, macOS27Controller.isConcealingItems, isConcealingSpacerDrawn(screen: screen) else { return }
+            await closeStragglerGapIfAny(screen: screen)
+        }
+    }
+
+    /// After the spacer is drawn, overflow whatever is still drawn between
+    /// the « button and the spacer by growing Ice's button (see
+    /// `MacOS27NativeMenuBarHiding.closeStragglerGap`).
+    @available(macOS 27.0, *)
+    private func closeStragglerGapIfAny(screen: NSScreen) async {
+        logger.notice("Straggler check: refreshing MenuBarAgent frames")
+        // Refresh MenuBarAgent's « frame; the targeted read updates it.
+        _ = await Task.detached(priority: .userInitiated) {
+            MacOS27MenuBarItemProvider.menuBarItems(sourcePIDs: [], namespaces: [.controlCenter])
+        }.value
+        guard macOS27Controller.isConcealingItems, !Task.isCancelled else {
+            logger.notice("Straggler check: abandoned (concealing \(self.macOS27Controller.isConcealingItems), cancelled \(Task.isCancelled))")
+            return
+        }
+        let spacer = MacOS27MenuBarItemProvider.ownMenuBarItems().first(matching: .nativeBoundary(for: .hidden))
+        let overflowFrames = MacOS27MenuBarItemProvider.overflowControlFrames
+        logger.notice("Straggler check: spacer \(spacer?.bounds.debugDescription ?? "none", privacy: .public), overflow control frames \(overflowFrames.map(\.debugDescription).joined(separator: " "), privacy: .public)")
+        guard
+            let spacer,
+            let overflow = overflowFrames
+                .filter({ $0.maxX < spacer.bounds.minX })
+                .max(by: { $0.maxX < $1.maxX })
+        else {
+            return
+        }
+        // A hole between the spacer and Ice's (padded) button holds an item
+        // Ice cannot enumerate; it sorts between them and never overflows
+        // while the spacer is left of it. Only a native drag of the boundary
+        // (a user toggle allows one) fixes the order, so ask for that.
+        if let ice = MacOS27MenuBarItemProvider.ownMenuBarItems().first(matching: .visibleControlItem) {
+            let hole = ice.bounds.minX - spacer.bounds.maxX
+            if hole > 8, !needsUserActionToAlignBoundary {
+                logger.error("An unenumerated item occupies \(hole) pt between the spacer and Ice's button; toggle Ice once to let it re-align the boundary, or Command-drag that item left of «")
+                needsUserActionToAlignBoundary = true
+            }
+        }
+        if nativeHiding.closeStragglerGap(spacerFrame: spacer.bounds, overflowControlMaxX: overflow.maxX, screen: screen) {
+            lastNativeConcealmentChange = .now
+            // The wider button must still fit; if MenuBarAgent dropped the
+            // spacer instead, the regular check below shows everything.
+            do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
+            if !isConcealingSpacerDrawn(screen: screen) {
+                logger.error("Closing the straggler gap displaced the spacer; showing all items")
+                let controlPosition = controlItem(withName: .visible)?.preferredPosition ?? 0
+                cancelNativeConcealment()
+                nativeHiding.setHidden(false, section: .hidden, anchorPosition: controlPosition, screen: screen)
+                macOS27Controller.isConcealingItems = false
+                for section in sections { section.controlItem.state = .showSection }
+            }
+        }
+    }
+
+    /// Whether the hidden section's concealing spacer has a frame on the
+    /// menu bar strip, i.e. MenuBarAgent accepted its length.
+    @available(macOS 27.0, *)
+    private func isConcealingSpacerDrawn(screen: NSScreen) -> Bool {
+        guard nativeHiding.isConcealing(.hidden) else { return true }
+        let display = CGDisplayBounds(screen.displayID)
+        let strip = CGRect(x: display.minX, y: display.minY, width: display.width, height: 40)
+        let items = MacOS27MenuBarItemProvider.ownMenuBarItems()
+        guard let spacer = items.first(matching: .nativeBoundary(for: .hidden)) else { return false }
+        return strip.contains(spacer.bounds) && spacer.bounds.width > 8
     }
 
     /// Returns whether Ice's visible control item is on the menu bar strip of
@@ -315,6 +437,8 @@ final class MenuBarManager: ObservableObject {
         if nativeHiding.resizeConcealingSpacerIfNeeded(section: .hidden, screen: screen, controlFrame: controlFrame) {
             lastNativeConcealmentChange = .now
             scheduleNativeConcealmentCheck(screen: screen)
+        } else {
+            scheduleStragglerCheck(screen: screen)
         }
     }
 
