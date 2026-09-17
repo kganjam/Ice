@@ -374,6 +374,20 @@ final class MenuBarItemImageCache: ObservableObject {
             guard let image = capture.image.cropping(to: cropRect),
                   !image.isTransparent(alphaThreshold: 0.05) else { continue }
 
+            // An item in MenuBarAgent's overflow can report a stale frame in
+            // EMPTY menu bar space (observed: Teams, OneDrive, LinearMouse and
+            // DisplayLink at x≈665–836 while the overflow button sat at 1170),
+            // which `isDrawn` cannot catch because the frame overlaps nothing.
+            // The crop is then a blank rectangle of menu bar material. Treat it
+            // as a missed capture so the Ice Bar falls back to the app icon
+            // instead of an empty tile.
+            guard MenuBarGlyphImage.make(from: image) != nil else {
+                if MacOS27GlyphDebug.isEnabled {
+                    MacOS27GlyphDebug.log("Skipped \(item.tag): blank crop \(cropRect) for frame \(bounds)")
+                }
+                continue
+            }
+
             if MacOS27GlyphDebug.isEnabled {
                 MacOS27GlyphDebug.write(image, name: "\(item.tag)-raw")
                 MacOS27GlyphDebug.log("Captured \(item.tag): frame \(bounds), crop \(cropRect), scale \(capture.scale)")
