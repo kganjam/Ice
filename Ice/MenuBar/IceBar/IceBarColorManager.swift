@@ -50,6 +50,11 @@ final class IceBarColorManager: ObservableObject {
                     else {
                         return
                     }
+                    if #available(macOS 27.0, *) {
+                        // The strip capture is taken only while visible, so
+                        // refresh it on show; it applies the color itself.
+                        updateWindowImage(for: screen)
+                    }
                     updateColorInfo(with: iceBarPanel.frame, screen: screen)
                 }
                 .store(in: &c)
@@ -110,6 +115,34 @@ final class IceBarColorManager: ObservableObject {
     }
 
     private func updateWindowImage(for screen: NSScreen) {
+        if #available(macOS 27.0, *) {
+            // The window-list capture below yields nothing on macOS 27, so
+            // `colorInfo` stayed nil and the Ice Bar fell back to
+            // `Color.defaultLayoutBar` (7 % white / 17 % black): a see-through
+            // bar with the hidden items drawn over whatever window sat under
+            // it. Sample the same display-strip screenshot the thumbnails use.
+            // Only while the bar is visible: this is a screen capture, and a
+            // capture every 5 s would keep macOS's recording indicator lit.
+            guard let iceBarPanel, iceBarPanel.isVisible else {
+                return
+            }
+            let displayID = screen.displayID
+            Task { @MainActor [weak self] in
+                guard
+                    let capture = await ScreenCapture.captureMenuBarDisplayStrip(displayID: displayID),
+                    let self,
+                    let iceBarPanel = self.iceBarPanel,
+                    iceBarPanel.isVisible,
+                    let screen = iceBarPanel.screen
+                else {
+                    return
+                }
+                self.windowImage = capture.image
+                self.updateColorInfo(with: iceBarPanel.frame, screen: screen)
+            }
+            return
+        }
+
         let windows = WindowInfo.createWindows(option: .onScreen)
         let displayID = screen.displayID
 
