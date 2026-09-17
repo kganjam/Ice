@@ -145,9 +145,14 @@ final class IceBarColorManager: ObservableObject {
             .insetBy(dx: -150, dy: 0)
             .intersection(imageBounds)
 
+        // `.ignoreAlpha`: the capture of the menu bar window is translucent
+        // (fully so on macOS 27 with "Show menu bar background" off), and an
+        // averaged alpha made the Ice Bar's background see-through, so the
+        // hidden items were drawn over whatever window sat under the bar.
+        // `MenuBarManager.updateAverageColorInfo()` already does the same.
         guard
             let croppedImage = image.cropping(to: cropRect),
-            let averageColor = croppedImage.averageColor()
+            let averageColor = croppedImage.averageColor(option: .ignoreAlpha)
         else {
             return
         }
