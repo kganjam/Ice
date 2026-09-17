@@ -297,6 +297,27 @@ final class MenuBarManager: ObservableObject {
         return true
     }
 
+    /// Re-fits the concealing spacer after the geometry it was sized for
+    /// changed: a display was added, removed or resized, or the frontmost app
+    /// (and so the width of the app menus) changed.
+    @available(macOS 27.0, *)
+    private func refreshNativeConcealmentLength() {
+        guard
+            nativeHiding.isConcealing(.hidden),
+            !macOS27Controller.isLayoutEditing,
+            nativeConcealmentTask == nil,
+            nativeDragVisibility.shouldApplyVisibilityUpdate(),
+            let screen = controlItem(withName: .visible)?.screen ?? NSScreen.main,
+            let controlFrame = currentIceButtonFrame()
+        else {
+            return
+        }
+        if nativeHiding.resizeConcealingSpacerIfNeeded(section: .hidden, screen: screen, controlFrame: controlFrame) {
+            lastNativeConcealmentChange = .now
+            scheduleNativeConcealmentCheck(screen: screen)
+        }
+    }
+
     /// Returns the current frame of Ice's visible control item, read through
     /// Accessibility from Ice's own process.
     @available(macOS 27.0, *)
@@ -424,6 +445,29 @@ final class MenuBarManager: ObservableObject {
                 }
             }
             .store(in: &c)
+
+        // macOS 27: the concealing spacer is sized for one display and one
+        // app-menu width. Re-fit it when either changes, once the bar and the
+        // new app's menus have settled.
+        if #available(macOS 27.0, *) {
+            Publishers.Merge3(
+                NSWorkspace.shared.publisher(for: \.frontmostApplication)
+                    .map { $0?.processIdentifier ?? 0 }
+                    .removeDuplicates()
+                    .replace(with: ()),
+                NotificationCenter.default
+                    .publisher(for: NSApplication.didChangeScreenParametersNotification)
+                    .replace(with: ()),
+                NSWorkspace.shared.notificationCenter
+                    .publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
+                    .replace(with: ())
+            )
+            .debounce(for: .milliseconds(600), scheduler: DispatchQueue.main)
+            .sink { [weak self] in
+                self?.refreshNativeConcealmentLength()
+            }
+            .store(in: &c)
+        }
 
         appState?.publisherForWindow(.settings)
             .sink { [weak self] window in

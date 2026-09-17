@@ -139,6 +139,35 @@ final class MacOS27NativeMenuBarHiding {
         if !spacer.item.isVisible { spacer.item.isVisible = true }
     }
 
+    /// Re-sizes a concealing spacer when the space it has to fill changed.
+    ///
+    /// The concealing length depends on the display (notch or not, width) and
+    /// on the frontmost app's menu width, but `setHidden` keeps an existing
+    /// length on later syncs to avoid needless reflows. Once the geometry does
+    /// change, a stale length leaves a gap left of the spacer and MenuBarAgent
+    /// draws the "hidden" items there (observed after switching from the
+    /// notch display to a 2304-pt external one, and after activating an app
+    /// with short menus). Returns whether the spacer was re-sized.
+    @available(macOS 27.0, *)
+    @discardableResult
+    func resizeConcealingSpacerIfNeeded(
+        section: MenuBarSection.Name,
+        screen: NSScreen,
+        controlFrame: CGRect,
+        tolerance: CGFloat = 4
+    ) -> Bool {
+        guard let spacer = spacers[section], isConcealing(section) else { return false }
+        let length = Self.concealingLength(
+            controlMinX: controlFrame.minX,
+            screen: screen,
+            applicationMenuMaxX: screen.getApplicationMenuFrame()?.maxX
+        )
+        guard abs(length - spacer.item.length) > tolerance else { return false }
+        logger.notice("Re-sizing \(section.rawValue, privacy: .public) spacer from \(spacer.item.length) to \(length) (control frame: \(controlFrame.debugDescription, privacy: .public))")
+        spacer.item.length = length
+        return true
+    }
+
     /// Returns a spacer length that fills the space available to the left of
     /// the item at `controlMinX`, so every item to the spacer's left overflows.
     ///
