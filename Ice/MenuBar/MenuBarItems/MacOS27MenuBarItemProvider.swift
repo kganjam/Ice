@@ -37,6 +37,49 @@ enum MacOS27MenuBarItemProvider {
         return lastOverflowControlFrames
     }
 
+    /// The horizontal extent of the frontmost application's menu titles.
+    ///
+    /// Status items are never drawn over the app menus: MenuBarAgent moves
+    /// them into its overflow instead. An item in that overflow keeps
+    /// reporting the frame where it was last drawn, and that frame can sit
+    /// in the app-menu region once the bar has reflowed (observed: four
+    /// overflowed items at x≈665–836 under "…Window Help"). Such a frame
+    /// overlaps nothing `isDrawn` knows about, so the extent is needed to
+    /// reject it; otherwise its crop is a fragment of a menu title.
+    struct AppMenuExtent {
+        /// The frame of the app's `AXMenuBar` element.
+        let barFrame: CGRect
+        /// The right edge of the rightmost menu title.
+        let maxX: CGFloat
+    }
+
+    /// Reads the frontmost app's `AXMenuBar` on the main thread. `nil` when
+    /// there is no frontmost app or its accessibility tree doesn't answer.
+    static func frontmostAppMenuExtent() -> AppMenuExtent? {
+        AXHelpers.performOnMain {
+            guard
+                let runningApp = NSWorkspace.shared.frontmostApplication,
+                let application = AXHelpers.application(for: runningApp),
+                let menuBar: UIElement = try? application.attribute(.menuBar),
+                let barFrame = AXHelpers.frame(for: menuBar),
+                barFrame.height > 0,
+                barFrame.height <= maxItemHeight
+            else {
+                return nil
+            }
+            let titleFrames = AXHelpers.children(for: menuBar).compactMap { child -> CGRect? in
+                guard let frame = AXHelpers.frame(for: child), frame.width > 0 else {
+                    return nil
+                }
+                return barFrame.contains(CGPoint(x: frame.midX, y: frame.midY)) ? frame : nil
+            }
+            guard let maxX = titleFrames.map(\.maxX).max() else {
+                return nil
+            }
+            return AppMenuExtent(barFrame: barFrame, maxX: maxX)
+        }
+    }
+
     /// A single main-thread batch for our own controls only. Do not take the
     /// background scan lock here: its owner may be waiting for the main thread.
     @MainActor
@@ -138,6 +181,7 @@ enum MacOS27MenuBarItemProvider {
                 return CGRect(x: display.minX, y: display.minY, width: display.width, height: maxItemHeight)
             }
         }
+        let appMenuExtent = frontmostAppMenuExtent()
 
         for runningApp in runningApplications {
             rawItems.append(contentsOf: AXHelpers.performOnMain {
@@ -150,7 +194,7 @@ enum MacOS27MenuBarItemProvider {
             })
         }
 
-        return assemble(rawItems)
+        return assemble(rawItems, appMenuExtent: appMenuExtent)
     }
 
     /// A grace-period expiry is not enough to remove a retained tile: confirm
@@ -326,7 +370,7 @@ enum MacOS27MenuBarItemProvider {
         let accessibilityValue: String?
     }
 
-    private static func assemble(_ rawItems: [RawItem]) -> [MenuBarItem] {
+    private static func assemble(_ rawItems: [RawItem], appMenuExtent: AppMenuExtent? = nil) -> [MenuBarItem] {
         let sorted = rawItems.sorted { lhs, rhs in
             if lhs.bounds.minX == rhs.bounds.minX {
                 return lhs.bounds.minY < rhs.bounds.minY
@@ -358,6 +402,13 @@ enum MacOS27MenuBarItemProvider {
         let contentItems = rawItems.filter { !isNativeOverflowControl($0) }
         func isDrawn(_ rawItem: RawItem) -> Bool {
             if overflowFrames.contains(where: { $0.intersects(rawItem.bounds) }) {
+                return false
+            }
+            // A frame under the frontmost app's menu titles is stale: nothing
+            // is drawn there but the titles themselves.
+            if let appMenuExtent,
+               appMenuExtent.barFrame.contains(CGPoint(x: rawItem.bounds.midX, y: rawItem.bounds.midY)),
+               rawItem.bounds.minX < appMenuExtent.maxX {
                 return false
             }
             // Hosted hit areas of adjacent items can overlap by a few points.
