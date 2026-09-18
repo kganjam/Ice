@@ -290,6 +290,7 @@ final class MacOS27DisallowedAppsMode: ObservableObject {
             guard !done.isEmpty else { return false }
             logger.notice("Temporarily re-allowed \(bundleID, privacy: .public)")
             restartMenuBarAgent()
+            notAllowedAtLastRestart = notAllowedInRecord()
             return true
         } catch {
             logger.error("Could not re-allow \(bundleID, privacy: .public): \(error)")

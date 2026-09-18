@@ -55,6 +55,15 @@ final class MenuBarManager: ObservableObject {
     private let nativeHiding = MacOS27NativeMenuBarHiding()
     /// macOS 27 "Allow in the Menu Bar" based hiding (opt-in flag).
     let disallowedAppsMode = MacOS27DisallowedAppsMode()
+    /// macOS 27 assessment-mode hiding: live, no restart (opt-in flag).
+    private var _assessmentMode: Any?
+    @available(macOS 27.0, *)
+    private var assessmentMode: MacOS27AssessmentMode {
+        if let mode = _assessmentMode as? MacOS27AssessmentMode { return mode }
+        let mode = MacOS27AssessmentMode()
+        _assessmentMode = mode
+        return mode
+    }
     private var nativeConcealmentTask: Task<Void, Never>?
     private var nativeConcealmentCheckTask: Task<Void, Never>?
     private var stragglerCheckTask: Task<Void, Never>?
@@ -147,6 +156,31 @@ final class MenuBarManager: ObservableObject {
         }
     }
 
+    /// The assessment mode's replacement for the spacer logic: keep Ice and
+    /// the visible section's apps on the bar; MenuBarAgent removes the rest
+    /// live. An Ice Bar reveal lifts the assertion (also live).
+    @available(macOS 27.0, *)
+    private func applyAssessmentMode(hideHidden: Bool, screen: NSScreen, controlPosition: CGFloat, cache: MenuBarItemManager.ItemCache) {
+        nativeHiding.setHidden(false, section: .hidden, anchorPosition: controlPosition, screen: screen)
+        nativeHiding.setHidden(false, section: .alwaysHidden, anchorPosition: controlPosition, screen: screen)
+        let hidden = hideHidden && !macOS27Controller.isLayoutEditing
+        macOS27Controller.isConcealingItems = hidden
+        guard hidden else {
+            assessmentMode.reveal()
+            logNativeVisibilityDecision("assessment mode: revealed")
+            return
+        }
+        var allowed: Set<String> = [Constants.bundleIdentifier]
+        for item in cache[.visible] where !item.isControlItem {
+            let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID)
+            if let id = app?.bundleIdentifier { allowed.insert(id) }
+        }
+        logNativeVisibilityDecision("assessment mode: concealing all but \(allowed.sorted().joined(separator: ","))")
+        Task { [weak self] in
+            await self?.assessmentMode.conceal(allowing: allowed)
+        }
+    }
+
     /// Re-allows everything the disallowed-apps mode hid. Called on quit.
     func restoreDisallowedAppsOnQuit() {
         guard #available(macOS 27.0, *), !disallowedAppsMode.disallowedApps.isEmpty else { return }
@@ -218,6 +252,11 @@ final class MenuBarManager: ObservableObject {
             controlPosition + max(0, iceBounds.minX - leftmostHidden.bounds.minX)
         } else {
             controlPosition
+        }
+
+        if MacOS27AssessmentMode.isEnabled, MenuBarAssessmentAssertion27.isAvailable {
+            applyAssessmentMode(hideHidden: hideHidden, screen: screen, controlPosition: controlPosition, cache: cache)
+            return
         }
 
         if MacOS27DisallowedAppsMode.isEnabled {
