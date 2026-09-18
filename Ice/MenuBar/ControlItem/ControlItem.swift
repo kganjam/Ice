@@ -366,6 +366,9 @@ final class ControlItem {
         }
     }
 
+    /// The button cell's original `highlightsBy`, restored when unpadded.
+    private var defaultHighlightsBy: NSCell.StyleMask?
+
     /// Updates the appearance of the status item using the current hiding state.
     private func updateStatusItem() {
         guard
@@ -430,6 +433,13 @@ final class ControlItem {
                 }
                 padded.isTemplate = glyph.isTemplate
                 image = padded
+            }
+            if #available(macOS 27.0, *), let cell = button.cell as? NSButtonCell {
+                // The press highlight spans the whole button, padding included,
+                // which reads as a large gray oval. Keep it only when unpadded.
+                if defaultHighlightsBy == nil { defaultHighlightsBy = cell.highlightsBy }
+                let wanted: NSCell.StyleMask = leadingConcealmentPadding > 0 ? [] : (defaultHighlightsBy ?? cell.highlightsBy)
+                if cell.highlightsBy != wanted { cell.highlightsBy = wanted }
             }
 
             button.image = image

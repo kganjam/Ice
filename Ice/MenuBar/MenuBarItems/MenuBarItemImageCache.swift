@@ -348,10 +348,15 @@ final class MenuBarItemImageCache: ObservableObject {
                 continue
             }
 
+            // Some owners report a frame a few points narrower than the glyph
+            // they draw (a play button lost its left edge). Items sit ≥8 pt
+            // apart, so 3 pt of slack per side stays clear of neighbours; the
+            // glyph extraction trims transparent margins afterwards.
+            let cropSlack: CGFloat = 3
             let expectedCropRect = CGRect(
-                x: (bounds.minX - capture.windowFrame.minX) * capture.scale,
+                x: (bounds.minX - cropSlack - capture.windowFrame.minX) * capture.scale,
                 y: (bounds.minY - capture.windowFrame.minY) * capture.scale,
-                width: bounds.width * capture.scale,
+                width: (bounds.width + cropSlack * 2) * capture.scale,
                 height: bounds.height * capture.scale
             ).integral
             let cropRect = expectedCropRect.intersection(imageBounds)
