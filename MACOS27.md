@@ -148,3 +148,22 @@ the 2056-pt MacBook panel):
   preferred position until MenuBarAgent inserts it directly beside the
   button (`reinsertSpacerAdjacent`), which needs no pointer input. The
   winning value is kept under the base autosave key.
+
+### Disallowed-apps mode (opt-in)
+
+`defaults write com.jordanbaird.Ice MacOS27DisallowHiddenApps -bool true`
+(relaunch Ice; `-bool false` to go back). Requires Full Disk Access for Ice.
+
+Instead of a spacer, hiding the section turns the owning apps' "Allow in
+the Menu Bar" switch off in Control Center's record
+(`group.com.apple.controlcenter` › `trackedApplications`) and restarts
+MenuBarAgent (`killall`; `launchctl kickstart` is refused under SIP), a
+one-to-two-second blink. MenuBarAgent honours the switch only when it
+starts. A disallowed item is not laid out, so there is no « and no blank
+space. Showing the section re-allows and restarts again; quitting Ice or
+turning the flag off re-allows everything. The Ice Bar lists disallowed
+apps by icon; clicking one activates the app.
+
+Limits: only apps present in the record can be disallowed (MenuBarAgent's
+own modules, Apple apps that never registered there, and items Ice cannot
+enumerate stay visible; hide those in System Settings or the app itself).

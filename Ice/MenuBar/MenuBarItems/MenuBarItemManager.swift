@@ -1361,14 +1361,18 @@ extension MenuBarItemManager {
             return
         }
         let menuBarManager = appState.menuBarManager
+        let clock = ContinuousClock()
+        let started = clock.now
         menuBarManager.beginIceBarReveal()
         defer {
             menuBarManager.endIceBarReveal()
         }
+        logger.notice("Ice Bar click on \(item.logString, privacy: .public): reveal requested after \(started.duration(to: clock.now))")
 
         let clickPoint: CGPoint
         var ownerPIDs: Set<pid_t>
         if let revealedItem = await waitForRevealedItem(item) {
+            logger.notice("Ice Bar click: item settled after \(started.duration(to: clock.now))")
             clickPoint = revealedItem.bounds.center
             ownerPIDs = Set([revealedItem.ownerPID, revealedItem.sourcePID].compactMap { $0 })
         } else if let overflowFrame = MacOS27MenuBarItemProvider.overflowControlFrames.first {
@@ -1393,7 +1397,7 @@ extension MenuBarItemManager {
             logger.error("Clicking \(item.logString, privacy: .public) failed: \(error, privacy: .public)")
             return
         }
-        logger.notice("Clicked \(item.logString, privacy: .public) at \(clickPoint.debugDescription, privacy: .public)")
+        logger.notice("Clicked \(item.logString, privacy: .public) at \(clickPoint.debugDescription, privacy: .public) after \(started.duration(to: clock.now))")
 
         // The items are visible now, so refresh the Ice Bar's images.
         Task {
@@ -1426,11 +1430,17 @@ extension MenuBarItemManager {
         let sourcePIDs: Set<pid_t> = [item.sourcePID ?? item.ownerPID]
         let namespaces: Set<MenuBarItemTag.Namespace> = [item.tag.namespace]
         var previousBounds: CGRect?
-        for _ in 0 ..< 20 {
-            try? await Task.sleep(for: .milliseconds(100))
+        let clock = ContinuousClock()
+        for attempt in 0 ..< 40 {
+            try? await Task.sleep(for: .milliseconds(50))
+            let readStarted = clock.now
             let items = await Task.detached(priority: .userInitiated) {
                 MacOS27MenuBarItemProvider.menuBarItems(sourcePIDs: sourcePIDs, namespaces: namespaces)
             }.value
+            let readDuration = readStarted.duration(to: clock.now)
+            if readDuration > .milliseconds(150) {
+                logger.notice("Reveal poll \(attempt): targeted AX read took \(readDuration) (waiting on a full scan?)")
+            }
             guard
                 let current = items.first(matching: item.tag),
                 current.isOnScreen,

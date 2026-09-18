@@ -313,6 +313,14 @@ private struct IceBarContentView: View {
         itemManager.itemCache.managedItems(for: section)
     }
 
+    /// Apps the disallowed-apps mode hid whose items are no longer
+    /// enumerated (a disallowed item isn't laid out at all).
+    @available(macOS 27.0, *)
+    private var disallowedAppsNotListed: [String] {
+        let listed = Set(items.compactMap { $0.sourceApplication?.bundleIdentifier })
+        return menuBarManager.disallowedAppsMode.disallowedApps.subtracting(listed).sorted()
+    }
+
     /// Whether items without a captured image show their app's icon instead.
     /// Concealed items aren't drawn at all on macOS 27, so an image can be
     /// missing even with screen recording permission.
@@ -441,6 +449,13 @@ private struct IceBarContentView: View {
                             section: section
                         )
                     }
+                    if #available(macOS 27.0, *), section == .hidden {
+                        // Apps hidden through "Allow in the Menu Bar" have no
+                        // item to show; list them by app icon instead.
+                        ForEach(disallowedAppsNotListed, id: \.self) { bundleID in
+                            IceBarDisallowedAppView(bundleID: bundleID, menuBarManager: menuBarManager)
+                        }
+                    }
                 }
             }
             .environment(\.isScrollEnabled, frame.width == screen.frame.width)
@@ -561,6 +576,56 @@ private struct IceBarItemView: View {
                 .accessibilityLabel(item.displayName)
                 .accessibilityAction(named: "left click", leftClickAction)
                 .accessibilityAction(named: "right click", rightClickAction)
+        }
+    }
+}
+
+// MARK: - IceBarDisallowedAppView
+
+/// A tile for an app hidden through "Allow in the Menu Bar": its item is
+/// not laid out, so it cannot be clicked. Clicking the tile activates the
+/// app (launching it if needed).
+@available(macOS 27.0, *)
+private struct IceBarDisallowedAppView: View {
+    let bundleID: String
+    @ObservedObject var menuBarManager: MenuBarManager
+
+    private var image: NSImage? {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            return nil
+        }
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        icon.size = CGSize(width: 18, height: 18)
+        return NSImage(size: CGSize(width: 32, height: 22), flipped: false) { bounds in
+            icon.draw(in: CGRect(
+                x: (bounds.width - icon.size.width) / 2,
+                y: (bounds.height - icon.size.height) / 2,
+                width: icon.size.width,
+                height: icon.size.height
+            ))
+            return true
+        }
+    }
+
+    private var name: String {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName ?? bundleID
+    }
+
+    var body: some View {
+        if let image {
+            Image(nsImage: image)
+                .renderingMode(.original)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    menuBarManager.section(withName: .hidden)?.hide()
+                    if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
+                        app.activate()
+                    } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+                    }
+                }
+                .help(name)
+                .accessibilityLabel(name)
         }
     }
 }

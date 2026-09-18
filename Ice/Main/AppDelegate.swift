@@ -74,6 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        // Never leave apps disallowed in the menu bar without Ice running.
+        appState.menuBarManager.restoreDisallowedAppsOnQuit()
+    }
+
     // MARK: Other Methods
 
     /// Opens the settings window and activates the app.

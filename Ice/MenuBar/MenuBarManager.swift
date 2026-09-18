@@ -53,6 +53,8 @@ final class MenuBarManager: ObservableObject {
     /// macOS 27's assignment-backed menu bar compatibility controller.
     let macOS27Controller = MacOS27MenuBarController()
     private let nativeHiding = MacOS27NativeMenuBarHiding()
+    /// macOS 27 "Allow in the Menu Bar" based hiding (opt-in flag).
+    let disallowedAppsMode = MacOS27DisallowedAppsMode()
     private var nativeConcealmentTask: Task<Void, Never>?
     private var nativeConcealmentCheckTask: Task<Void, Never>?
     private var stragglerCheckTask: Task<Void, Never>?
@@ -104,7 +106,41 @@ final class MenuBarManager: ObservableObject {
             nativeHiding.extraConcealmentHandler = { [weak self] extra in
                 self?.controlItem(withName: .visible)?.leadingConcealmentPadding = extra
             }
+            // The mode was turned off while apps were disallowed: give them back.
+            if !MacOS27DisallowedAppsMode.isEnabled, !disallowedAppsMode.disallowedApps.isEmpty {
+                logger.notice("Disallowed-apps mode is off; re-allowing what Ice had disallowed")
+                disallowedAppsMode.restoreAll()
+            }
         }
+    }
+
+    /// Re-allows everything the disallowed-apps mode hid. Called on quit.
+    func restoreDisallowedAppsOnQuit() {
+        guard #available(macOS 27.0, *), !disallowedAppsMode.disallowedApps.isEmpty else { return }
+        disallowedAppsMode.restoreAll()
+    }
+
+    /// The disallowed-apps mode's replacement for the spacer logic: exactly
+    /// the apps owning the hidden section's items are set to not allowed.
+    @available(macOS 27.0, *)
+    private func applyDisallowedAppsMode(hideHidden: Bool, screen: NSScreen, controlPosition: CGFloat, cache: MenuBarItemManager.ItemCache) {
+        // Nothing else conceals in this mode.
+        nativeHiding.setHidden(false, section: .hidden, anchorPosition: controlPosition, screen: screen)
+        nativeHiding.setHidden(false, section: .alwaysHidden, anchorPosition: controlPosition, screen: screen)
+        let hidden = hideHidden && !macOS27Controller.isLayoutEditing
+        var apps = Set<String>()
+        if hidden {
+            for item in cache[.hidden] where !item.isControlItem {
+                let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID)
+                guard let id = app?.bundleIdentifier, id != Constants.bundleIdentifier else { continue }
+                apps.insert(id)
+            }
+            // Items already disallowed are no longer enumerated; keep them.
+            apps.formUnion(disallowedAppsMode.disallowedApps)
+        }
+        macOS27Controller.isConcealingItems = hidden
+        logNativeVisibilityDecision("disallowed-apps mode: hidden=\(hidden), apps=\(apps.sorted().joined(separator: ","))")
+        disallowedAppsMode.apply(hiddenApps: apps)
     }
 
     /// Applies only Ice-owned spacer state. Other status items receive native input.
@@ -137,6 +173,11 @@ final class MenuBarManager: ObservableObject {
             controlPosition + max(0, iceBounds.minX - leftmostHidden.bounds.minX)
         } else {
             controlPosition
+        }
+
+        if MacOS27DisallowedAppsMode.isEnabled {
+            applyDisallowedAppsMode(hideHidden: hideHidden, screen: screen, controlPosition: controlPosition, cache: cache)
+            return
         }
 
         if macOS27Controller.isLayoutEditing {
@@ -553,6 +594,11 @@ final class MenuBarManager: ObservableObject {
     /// Configures the internal observers for the manager.
     private func configureCancellables() {
         var c = Set<AnyCancellable>()
+
+        // The Ice Bar lists disallowed apps through this manager.
+        disallowedAppsMode.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &c)
 
         NSApp.publisher(for: \.currentSystemPresentationOptions)
             .receive(on: DispatchQueue.main)
