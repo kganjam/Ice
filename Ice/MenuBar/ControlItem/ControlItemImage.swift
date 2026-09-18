@@ -33,11 +33,7 @@ enum ControlItemImage: Codable, Hashable {
             guard let originalImage = NSImage(named: name) else {
                 return nil
             }
-            let originalWidth = originalImage.size.width
-            let originalHeight = originalImage.size.height
-            let ratio = max(originalWidth / 25, originalHeight / 17)
-            let newSize = CGSize(width: originalWidth / ratio, height: originalHeight / ratio)
-            return originalImage.resized(to: newSize)
+            return Self.fitted(catalogImage: originalImage, name: name)
         case .data(let data):
             let image = NSImage(data: data)
             image?.isTemplate = appState.settings.general.customIceIconIsTemplate
@@ -47,6 +43,32 @@ enum ControlItemImage: Codable, Hashable {
 }
 
 extension ControlItemImage {
+    /// Catalog images fitted into the 25×17 button box, keyed by name.
+    @MainActor
+    private static var fittedCatalogImages = [String: NSImage]()
+
+    /// Fits a catalog image into the 25×17 button box. Its transparent
+    /// padding is cropped first, so the glyph draws at the same size as
+    /// before but the image is no larger than the glyph: the status bar
+    /// button scales down any image taller than itself, which would cap
+    /// the icon size setting for a padded glyph like the Dot (18 px of 40).
+    @MainActor
+    private static func fitted(catalogImage original: NSImage, name: String) -> NSImage {
+        if let cached = fittedCatalogImages[name] {
+            return cached
+        }
+        let ratio = max(original.size.width / 25, original.size.height / 17)
+        let glyphBounds = original.opaqueBounds ?? CGRect(origin: .zero, size: original.size)
+        let size = CGSize(width: glyphBounds.width / ratio, height: glyphBounds.height / ratio)
+        let image = NSImage(size: size, flipped: false) { bounds in
+            original.draw(in: bounds, from: glyphBounds, operation: .sourceOver, fraction: 1)
+            return true
+        }
+        image.isTemplate = original.isTemplate
+        fittedCatalogImages[name] = image
+        return image
+    }
+
     /// A name for an image that is created from drawing code in the app.
     enum ImageBuiltinName: Codable, Hashable {
         /// A large chevron.

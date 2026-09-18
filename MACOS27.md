@@ -190,8 +190,9 @@ listed.
 Apps Ice cannot enumerate (no `AXExtrasMenuBar`: Parallels Desktop,
 MacMixer) never reach the visible section, so an assertion removes them.
 Keep them on the bar with
-`defaults write com.jordanbaird.Ice MacOS27AssessmentAlwaysAllowed -array com.parallels.desktop.console com.macmixer.app`
-(read on every hide, no relaunch).
+`defaults write com.jordanbaird.Ice MacOS27AssessmentAlwaysAllowed -array com.parallels.vm com.macmixer.app`
+(read on every hide, no relaunch). The Parallels icon in Coherence belongs
+to the VM process (`com.parallels.vm`), not `com.parallels.desktop.console`.
 
 ### Item identity
 

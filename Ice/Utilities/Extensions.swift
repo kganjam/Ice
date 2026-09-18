@@ -389,6 +389,57 @@ extension NSImage {
         resizedImage.isTemplate = isTemplate
         return resizedImage
     }
+
+    /// The smallest rectangle, in points, that contains every pixel with
+    /// an alpha above ~6%, or `nil` for an empty or unreadable image.
+    var opaqueBounds: CGRect? {
+        guard
+            let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil),
+            cgImage.width > 0, cgImage.height > 0, size.width > 0, size.height > 0
+        else {
+            return nil
+        }
+        let width = cgImage.width
+        let height = cgImage.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else {
+                return false
+            }
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn else { return nil }
+
+        var minX = width, maxX = -1, minRow = height, maxRow = -1
+        for row in 0..<height {
+            for x in 0..<width where pixels[(row * width + x) * 4 + 3] > 16 {
+                minX = min(minX, x)
+                maxX = max(maxX, x)
+                minRow = min(minRow, row)
+                maxRow = max(maxRow, row)
+            }
+        }
+        guard maxX >= 0 else { return nil }
+
+        // Bitmap rows run top-down; image coordinates run bottom-up.
+        let scaleX = CGFloat(width) / size.width
+        let scaleY = CGFloat(height) / size.height
+        return CGRect(
+            x: CGFloat(minX) / scaleX,
+            y: CGFloat(height - 1 - maxRow) / scaleY,
+            width: CGFloat(maxX - minX + 1) / scaleX,
+            height: CGFloat(maxRow - minRow + 1) / scaleY
+        )
+    }
 }
 
 // MARK: - NSScreen

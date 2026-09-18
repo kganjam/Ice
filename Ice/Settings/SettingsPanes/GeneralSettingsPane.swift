@@ -82,8 +82,8 @@ struct GeneralSettingsPane: View {
             IceSlider(
                 LocalizedStringKey("\(Int((settings.iceIconScale * 100).rounded()))%"),
                 value: $settings.iceIconScale,
-                in: 0.5...1.5,
-                step: 0.05
+                in: 0.5...2.5,
+                step: 0.1
             )
         } label: {
             Text("Icon size")
