@@ -452,22 +452,29 @@ extension MenuBarItemManager {
             logger.notice("An unenumerated item occupies \(pixelGap) pt between Ice's boundary and its button")
         }
         if !MacOS27NativeBoundary.isImmediatelyBefore(boundary.tag, ice.tag, in: order) || pixelGap > 8 {
-            // Never take over the pointer without an explicit user action.
-            guard allowingDrag else {
-                logger.notice("Not dragging Ice's boundary without a user action")
-                return false
+            // Re-inserting the spacer at a bisected preferred position needs
+            // no pointer input and also passes items the snapshot can't see.
+            if await appState.menuBarManager.reinsertNativeBoundaryAdjacent(displayID: displayID) {
+                snapshot = await currentMacOS27ReorderSnapshot(appState: appState)
+            } else {
+                // Never take over the pointer without an explicit user action.
+                guard allowingDrag else {
+                    logger.notice("Not dragging Ice's boundary without a user action")
+                    return false
+                }
+                guard await performMacOS27NativeMove(
+                    item: boundary,
+                    destination: destination,
+                    contextItems: snapshot,
+                    appState: appState
+                ) else { return false }
+                snapshot = await currentMacOS27ReorderSnapshot(appState: appState)
             }
-            guard await performMacOS27NativeMove(
-                item: boundary,
-                destination: destination,
-                contextItems: snapshot,
-                appState: appState
-            ) else { return false }
-            snapshot = await currentMacOS27ReorderSnapshot(appState: appState)
         }
         guard !Task.isCancelled,
               let currentIce = snapshot.first(matching: .visibleControlItem),
               let currentBoundary = snapshot.first(matching: .nativeBoundary(for: .hidden)),
+              currentIce.bounds.minX - currentBoundary.bounds.maxX <= 8,
               MacOS27NativeBoundary.side(of: currentBoundary.bounds, relativeTo: currentIce.bounds) == .left,
               MacOS27NativeBoundary.isImmediatelyBefore(
                 currentBoundary.tag,

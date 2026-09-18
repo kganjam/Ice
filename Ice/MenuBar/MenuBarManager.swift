@@ -336,10 +336,25 @@ final class MenuBarManager: ObservableObject {
         }
     }
 
+    /// Re-creates the hidden section's spacer so MenuBarAgent inserts it
+    /// beside Ice's button (see `MacOS27NativeMenuBarHiding.reinsertSpacerAdjacent`).
+    @available(macOS 27.0, *)
+    func reinsertNativeBoundaryAdjacent(displayID: CGDirectDisplayID?) async -> Bool {
+        guard let screen = NSScreen.screens.first(where: { $0.displayID == displayID })
+            ?? controlItem(withName: .visible)?.screen ?? NSScreen.main else { return false }
+        return await nativeHiding.reinsertSpacerAdjacent(section: .hidden, controlItemTag: .visibleControlItem, screen: screen)
+    }
+
     /// Runs the straggler check in its own task, so a concurrent visibility
     /// sync that restarts the concealment check doesn't cancel it midway.
     @available(macOS 27.0, *)
     private func scheduleStragglerCheck(screen: NSScreen) {
+        // Superseded by spacer reinsertion (reinsertNativeBoundaryAdjacent):
+        // with the spacer directly beside Ice's button nothing can sort
+        // between them, and growing the button off a « frame read during a
+        // reflow (observed: a 303-pt "gap" right after reinsertion) only
+        // caused churn. Kept for diagnosis; enable by removing this return.
+        return
         // Button-only concealment has no spacer and nothing can sort between
         // Ice's button and what it hides.
         guard !MacOS27NativeMenuBarHiding.usesButtonOnlyConcealment(on: screen) else { return }

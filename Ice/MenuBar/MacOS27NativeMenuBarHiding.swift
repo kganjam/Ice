@@ -136,6 +136,89 @@ final class MacOS27NativeMenuBarHiding {
         withdraw(item)
     }
 
+    private var spacerGeneration = 0
+
+    /// Re-creates a section's spacer so that MenuBarAgent inserts it
+    /// immediately left of Ice's button, without any pointer input.
+    ///
+    /// Measured on 27.0: MenuBarAgent places a NEW status item by its
+    /// app-declared preferred position relative to the values it holds for
+    /// the existing items, monotonically (larger = further left), but the
+    /// mapping to points is opaque (a probe at 552 landed three items left
+    /// of Ice's button, 360 and 380 just right of it). Bisect the value
+    /// until the spacer's frame sits directly left of the button. This also
+    /// jumps over an item Ice cannot enumerate (no AXExtrasMenuBar), which a
+    /// drag guided by the AX order never sees. The AX identifier stays
+    /// constant so tags keep matching; only the autosave name changes,
+    /// otherwise MenuBarAgent restores the old slot.
+    @available(macOS 27.0, *)
+    func reinsertSpacerAdjacent(
+        section: MenuBarSection.Name,
+        controlItemTag: MenuBarItemTag,
+        screen: NSScreen
+    ) async -> Bool {
+        let base = "Ice.NativeBoundary.\(section.rawValue).v2"
+        var low: CGFloat = 0
+        var high: CGFloat = screen.frame.width
+        var probe = (UserDefaults.standard.object(forKey: "NSStatusItem Preferred Position \(base)") as? Double)
+            .map { CGFloat($0) } ?? 221
+        for attempt in 0 ..< 12 {
+            recreateSpacer(section: section, base: base, preferredPosition: probe)
+            do { try await Task.sleep(for: .milliseconds(350)) } catch { return false }
+            let items = MacOS27MenuBarItemProvider.ownMenuBarItems()
+            guard
+                let spacer = items.first(matching: .nativeBoundary(for: section)),
+                let ice = items.first(matching: controlItemTag),
+                spacer.bounds.width > 0, ice.bounds.width > 0
+            else {
+                logger.notice("Reinsertion probe \(attempt) at \(probe): frames unavailable")
+                continue
+            }
+            let gap = ice.bounds.minX - spacer.bounds.maxX
+            if spacer.bounds.minX >= ice.bounds.minX - 1 {
+                // Landed right of Ice's button: value too small.
+                low = probe
+            } else if gap <= 8 {
+                logger.notice("Spacer reinserted beside Ice's button at preferred position \(probe) (attempt \(attempt))")
+                showNarrow(spacers[section]!.item)
+                return true
+            } else {
+                // Left of the button with something in between: too large.
+                high = probe
+            }
+            logger.notice("Reinsertion probe \(attempt) at \(probe): spacer \(spacer.bounds.debugDescription, privacy: .public), Ice \(ice.bounds.debugDescription, privacy: .public), next range \(low)–\(high)")
+            probe = ((low + high) / 2).rounded()
+            if high - low < 1 { break }
+        }
+        logger.error("Could not place the spacer beside Ice's button by reinsertion")
+        return false
+    }
+
+    /// Removes a section's spacer and creates a fresh one at `preferredPosition`.
+    private func recreateSpacer(section: MenuBarSection.Name, base: String, preferredPosition: CGFloat) {
+        if let old = spacers[section] {
+            old.item.isVisible = false
+            NSStatusBar.system.removeStatusItem(old.item)
+            if let oldName = old.item.autosaveName {
+                UserDefaults.standard.removeObject(forKey: "NSStatusItem Preferred Position \(oldName)")
+                UserDefaults.standard.removeObject(forKey: "NSStatusItem Visible \(oldName)")
+            }
+        }
+        spacerGeneration += 1
+        let name = "\(base).g\(spacerGeneration)"
+        UserDefaults.standard.set(preferredPosition, forKey: "NSStatusItem Preferred Position \(name)")
+        // Remember the winning value under the base key for the next launch.
+        UserDefaults.standard.set(preferredPosition, forKey: "NSStatusItem Preferred Position \(base)")
+        let item = NSStatusBar.system.statusItem(withLength: 8)
+        item.autosaveName = name
+        item.button?.title = ""
+        item.button?.image = nil
+        item.button?.isEnabled = false
+        item.button?.setAccessibilityIdentifier(base)
+        item.isVisible = true
+        spacers[section] = Spacer(item: item)
+    }
+
     /// AppKit reserves a real slot even for a one-point item. Publish the
     /// narrow boundary only while an explicit operation needs a drag handle.
     func prepareForHiding(anchorPosition: CGFloat) {

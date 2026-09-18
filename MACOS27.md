@@ -128,3 +128,23 @@ The macOS 27 compatibility work is by PWB97 in
 [jordanbaird/Ice#980](https://github.com/jordanbaird/Ice/pull/980).
 Accessibility enumeration was adapted from the GPLv3
 [Thaw project](https://github.com/thaw-app/Thaw).
+
+## Additions in this fork (kganjam/Ice, `kg/macos-27`)
+
+Measured on 27.0 with probe status items (2304-pt Dell without a notch and
+the 2056-pt MacBook panel):
+
+- MenuBarAgent recomputes the overflow live, leftmost-first, from the total
+  width; nothing is sticky. A widened item is accepted only if the bar fits
+  after everything left of it has overflowed, and no single item may exceed
+  half the bar including its own padding. Wider items are dropped silently.
+- The concealing length is read from the frontmost app's `AXMenuBar`
+  (`getApplicationMenuFrame()` returns nil on an external display) and
+  re-fitted when the display or the frontmost app changes. What one item
+  can't carry becomes blank leading width on Ice's own button.
+- Items whose owner exposes no `AXExtrasMenuBar` are invisible to Ice. One
+  that sorts between the spacer and Ice's button can never be hidden. The
+  alignment now checks the pixel gap and re-creates the spacer at a bisected
+  preferred position until MenuBarAgent inserts it directly beside the
+  button (`reinsertSpacerAdjacent`), which needs no pointer input. The
+  winning value is kept under the base autosave key.
