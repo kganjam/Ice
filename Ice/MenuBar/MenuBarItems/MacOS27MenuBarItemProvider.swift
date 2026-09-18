@@ -128,10 +128,15 @@ enum MacOS27MenuBarItemProvider {
     /// are enough to refresh drag bounds and verify adjacency.
     static func menuBarItems(
         sourcePIDs: Set<pid_t>,
-        namespaces: Set<MenuBarItemTag.Namespace> = []
+        namespaces: Set<MenuBarItemTag.Namespace> = [],
+        waitForFullScan: Bool = true
     ) -> [MenuBarItem] {
-        operationLock.lock()
-        defer { operationLock.unlock() }
+        // A full scan can hold the lock for many seconds (every running app,
+        // 0.25 s AX timeout each). A click that is waiting for one item must
+        // not queue behind it: all AX reads run on the main thread anyway,
+        // so a targeted read can proceed without the lock.
+        let locked = waitForFullScan ? { operationLock.lock(); return true }() : operationLock.try()
+        defer { if locked { operationLock.unlock() } }
 
         guard
             AXHelpers.isProcessTrusted(),
@@ -183,19 +188,43 @@ enum MacOS27MenuBarItemProvider {
         }
         let appMenuExtent = frontmostAppMenuExtent()
 
+        let now = ProcessInfo.processInfo.systemUptime
         for runningApp in runningApplications {
-            rawItems.append(contentsOf: AXHelpers.performOnMain {
+            // An app that answered nothing after hitting the AX timeout is
+            // skipped for a while; a full scan of ~60 apps otherwise costs
+            // up to 15 s and blocks every targeted read behind the lock.
+            let pid = runningApp.processIdentifier
+            slowOwnersLock.lock()
+            let skipUntil = slowEmptyOwnersUntil[pid]
+            slowOwnersLock.unlock()
+            if let skipUntil, skipUntil > now { continue }
+            let started = ProcessInfo.processInfo.systemUptime
+            let items = AXHelpers.performOnMain {
                 Self.rawItems(
                     from: runningApp,
                     displayBounds: displayBounds,
                     menuBarFrames: menuBarFrames,
                     includeSupplementaryMetadata: includeSupplementaryMetadata
                 ).items
-            })
+            }
+            let elapsed = ProcessInfo.processInfo.systemUptime - started
+            slowOwnersLock.lock()
+            if items.isEmpty, elapsed > 0.2 {
+                slowEmptyOwnersUntil[pid] = now + 60
+            } else {
+                slowEmptyOwnersUntil.removeValue(forKey: pid)
+            }
+            slowOwnersLock.unlock()
+            rawItems.append(contentsOf: items)
         }
 
         return assemble(rawItems, appMenuExtent: appMenuExtent)
     }
+
+    /// Owners whose last read hit the AX timeout and returned no items,
+    /// with the uptime until which they are skipped.
+    private static var slowEmptyOwnersUntil = [pid_t: TimeInterval]()
+    private static let slowOwnersLock = NSLock()
 
     /// A grace-period expiry is not enough to remove a retained tile: confirm
     /// its owner still answers AX and no longer publishes that identity. Do

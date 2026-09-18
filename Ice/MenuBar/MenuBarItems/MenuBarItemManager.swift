@@ -1436,7 +1436,7 @@ extension MenuBarItemManager {
         for _ in 0 ..< 60 {
             try? await Task.sleep(for: .milliseconds(100))
             let items = await Task.detached(priority: .userInitiated) {
-                MacOS27MenuBarItemProvider.menuBarItems(sourcePIDs: pids)
+                MacOS27MenuBarItemProvider.menuBarItems(sourcePIDs: pids, waitForFullScan: false)
             }.value
             guard let current = items.first(where: { $0.isOnScreen && !$0.isControlItem }) else {
                 previousBounds = nil
@@ -1489,7 +1489,7 @@ extension MenuBarItemManager {
             try? await Task.sleep(for: .milliseconds(50))
             let readStarted = clock.now
             let items = await Task.detached(priority: .userInitiated) {
-                MacOS27MenuBarItemProvider.menuBarItems(sourcePIDs: sourcePIDs, namespaces: namespaces)
+                MacOS27MenuBarItemProvider.menuBarItems(sourcePIDs: sourcePIDs, namespaces: namespaces, waitForFullScan: false)
             }.value
             let readDuration = readStarted.duration(to: clock.now)
             if readDuration > .milliseconds(150) {

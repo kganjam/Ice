@@ -191,6 +191,15 @@ final class MacOS27DisallowedAppsMode: ObservableObject {
     @discardableResult
     func apply(hiddenApps: Set<String>) -> Bool {
         guard !recordUnavailable else { return false }
+        // The user may have flipped switches in System Settings since the
+        // last restart; those only take effect when MenuBarAgent starts, so
+        // restart for them too (ChatGPT stayed visible after being turned
+        // off there).
+        let recordNotAllowed = notAllowedInRecord()
+        var externalChange = false
+        if let applied = notAllowedAtLastRestart, applied != recordNotAllowed {
+            externalChange = true
+        }
         let tracked = trackedBundleIdentifiers()
         if tracked.isEmpty {
             // Reading another app's group container is "app data" access;
@@ -203,8 +212,14 @@ final class MacOS27DisallowedAppsMode: ObservableObject {
         let wanted = hiddenApps.intersection(tracked)
         let toDisallow = wanted.subtracting(disallowedApps)
         let toAllow = disallowedApps.subtracting(wanted)
-        guard !toDisallow.isEmpty || !toAllow.isEmpty else { return false }
-        var changed = false
+        guard !toDisallow.isEmpty || !toAllow.isEmpty || externalChange else {
+            if notAllowedAtLastRestart == nil { notAllowedAtLastRestart = recordNotAllowed }
+            return false
+        }
+        var changed = externalChange
+        if externalChange {
+            logger.notice("Allow in the Menu Bar switches changed outside Ice; restarting MenuBarAgent to apply them")
+        }
         do {
             if !toAllow.isEmpty {
                 let done = try setAllowed(true, for: toAllow)
@@ -225,8 +240,31 @@ final class MacOS27DisallowedAppsMode: ObservableObject {
             logger.notice("Not in the Allow in the Menu Bar record, left visible: \(skipped.sorted().joined(separator: ", "), privacy: .public)")
         }
         logger.notice("Disallowed apps now: \(self.disallowedApps.sorted().joined(separator: ", "), privacy: .public)")
-        if changed { restartMenuBarAgent() }
+        if changed {
+            restartMenuBarAgent()
+            notAllowedAtLastRestart = notAllowedInRecord()
+        }
         return changed
+    }
+
+    /// What MenuBarAgent applied at its last restart (all not-allowed apps
+    /// in the record, Ice's and the user's), to notice outside changes.
+    private var notAllowedAtLastRestart: Set<String>?
+
+    /// Every app the record currently marks as not allowed.
+    private func notAllowedInRecord() -> Set<String> {
+        guard let entries = try? readRecord() else { return [] }
+        var result = Set<String>()
+        var index = 0
+        while index + 1 < entries.count {
+            if let bundle = entries[index]["bundle"] as? [String: Any],
+               let id = bundle["_0"] as? String, entries[index].count == 1,
+               entries[index + 1]["isAllowed"] as? Bool == false {
+                result.insert(id)
+            }
+            index += 1
+        }
+        return result
     }
 
     /// Re-allows everything Ice disallowed. Used when the mode is turned
