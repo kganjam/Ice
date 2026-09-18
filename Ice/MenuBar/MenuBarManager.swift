@@ -114,6 +114,39 @@ final class MenuBarManager: ObservableObject {
         }
     }
 
+    /// Opens a disallowed app from the Ice Bar. Apps with windows are just
+    /// activated. A menu-bar-only app (accessory or background activation
+    /// policy) has nothing to activate: re-allow it, restart the agent,
+    /// click its item once it is laid out, and let the next sync disallow
+    /// it again after its menu closes.
+    @available(macOS 27.0, *)
+    func openDisallowedApp(bundleID: String) {
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        guard let app = running.first else {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+            }
+            return
+        }
+        // A menu bar helper is often a separate process; treat the app as
+        // menu-bar-only if none of its processes can come to the front.
+        let hasFrontableProcess = running.contains { $0.activationPolicy == .regular }
+        guard !hasFrontableProcess, let appState else {
+            app.activate()
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { disallowedAppsMode.endTemporaryAllow(bundleID) }
+            if disallowedAppsMode.allowTemporarily(bundleID) {
+                // MenuBarAgent relaunches and every app re-registers.
+                try? await Task.sleep(for: .milliseconds(1200))
+            }
+            let pids = Set(NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).map(\.processIdentifier))
+            await appState.itemManager.clickFirstItem(ownedBy: pids)
+        }
+    }
+
     /// Re-allows everything the disallowed-apps mode hid. Called on quit.
     func restoreDisallowedAppsOnQuit() {
         guard #available(macOS 27.0, *), !disallowedAppsMode.disallowedApps.isEmpty else { return }
@@ -147,6 +180,7 @@ final class MenuBarManager: ObservableObject {
             apps.formUnion(disallowedAppsMode.disallowedApps)
             apps.formUnion(disallowedAppsMode.runningTrackedApps())
             apps.subtract(visibleApps)
+            apps.subtract(disallowedAppsMode.temporarilyAllowed)
             apps.remove(Constants.bundleIdentifier)
         }
         macOS27Controller.isConcealingItems = hidden

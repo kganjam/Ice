@@ -235,4 +235,32 @@ final class MacOS27DisallowedAppsMode: ObservableObject {
     func restoreAll() -> Bool {
         apply(hiddenApps: [])
     }
+
+    /// Apps re-allowed for one click on their menu bar item. The sync that
+    /// computes the hidden set leaves these alone until `endTemporaryAllow`.
+    @Published private(set) var temporarilyAllowed = Set<String>()
+
+    /// Re-allows one app so its item is laid out and can be clicked.
+    /// Returns whether MenuBarAgent was restarted (the item appears after).
+    func allowTemporarily(_ bundleID: String) -> Bool {
+        temporarilyAllowed.insert(bundleID)
+        guard disallowedApps.contains(bundleID) else { return false }
+        do {
+            let done = try setAllowed(true, for: [bundleID])
+            disallowedApps.remove(bundleID)
+            persist()
+            guard !done.isEmpty else { return false }
+            logger.notice("Temporarily re-allowed \(bundleID, privacy: .public)")
+            restartMenuBarAgent()
+            return true
+        } catch {
+            logger.error("Could not re-allow \(bundleID, privacy: .public): \(error)")
+            return false
+        }
+    }
+
+    /// Ends a temporary allow; the next sync disallows the app again.
+    func endTemporaryAllow(_ bundleID: String) {
+        temporarilyAllowed.remove(bundleID)
+    }
 }

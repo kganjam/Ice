@@ -488,9 +488,12 @@ private struct IceBarItemView: View {
                 if MacOS27DisallowedAppsMode.isEnabled {
                     // A disallowed item is not laid out and cannot be clicked;
                     // the reveal path would re-allow everything (two agent
-                    // restarts, ~20 s). Activate the app instead.
-                    if let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID) {
-                        app.activate()
+                    // restarts, ~20 s). Open the app instead.
+                    let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID)
+                    if let bundleID = app?.bundleIdentifier {
+                        menuBarManager.openDisallowedApp(bundleID: bundleID)
+                    } else {
+                        app?.activate()
                     }
                     return
                 }
@@ -627,11 +630,7 @@ private struct IceBarDisallowedAppView: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     menuBarManager.section(withName: .hidden)?.hide()
-                    if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
-                        app.activate()
-                    } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-                        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-                    }
+                    menuBarManager.openDisallowedApp(bundleID: bundleID)
                 }
                 .help(name)
                 .accessibilityLabel(name)

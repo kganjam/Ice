@@ -1424,6 +1424,60 @@ extension MenuBarItemManager {
         }
     }
 
+    /// Waits for an item owned by one of `pids` to be laid out, clicks it,
+    /// and returns once the menu or window it opened has closed. Used by
+    /// the disallowed-apps mode after re-allowing a menu-bar-only app.
+    @available(macOS 27.0, *)
+    func clickFirstItem(ownedBy pids: Set<pid_t>) async {
+        let clock = ContinuousClock()
+        let started = clock.now
+        var found: MenuBarItem?
+        var previousBounds: CGRect?
+        for _ in 0 ..< 60 {
+            try? await Task.sleep(for: .milliseconds(100))
+            let items = await Task.detached(priority: .userInitiated) {
+                MacOS27MenuBarItemProvider.menuBarItems(sourcePIDs: pids)
+            }.value
+            guard let current = items.first(where: { $0.isOnScreen && !$0.isControlItem }) else {
+                previousBounds = nil
+                continue
+            }
+            if current.bounds == previousBounds {
+                found = current
+                break
+            }
+            previousBounds = current.bounds
+        }
+        guard let item = found else {
+            logger.error("No item owned by \(pids.sorted().map(String.init).joined(separator: ","), privacy: .public) appeared after re-allowing it")
+            return
+        }
+        logger.notice("Re-allowed item \(item.logString, privacy: .public) laid out after \(started.duration(to: clock.now))")
+        let ownerPIDs = Set([item.ownerPID, item.sourcePID].compactMap { $0 })
+        let windowsBeforeClick = Self.onScreenWindowIDs(ownedBy: ownerPIDs)
+        do {
+            try await postMacOS27Click(at: item.bounds.center, with: .left)
+        } catch {
+            logger.error("Clicking \(item.logString, privacy: .public) failed: \(error, privacy: .public)")
+            return
+        }
+        logger.notice("Clicked re-allowed \(item.logString, privacy: .public) after \(started.duration(to: clock.now))")
+        let deadline = ContinuousClock.now + .seconds(120)
+        var sawWindow = false
+        var samplesWithoutWindow = 0
+        while ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(200))
+            let newWindows = Self.onScreenWindowIDs(ownedBy: ownerPIDs).subtracting(windowsBeforeClick)
+            if newWindows.isEmpty {
+                samplesWithoutWindow += 1
+                if samplesWithoutWindow >= (sawWindow ? 2 : 6) { break }
+            } else {
+                sawWindow = true
+                samplesWithoutWindow = 0
+            }
+        }
+    }
+
     /// Waits for a revealed item to settle at a frame in the menu bar.
     @available(macOS 27.0, *)
     private func waitForRevealedItem(_ item: MenuBarItem) async -> MenuBarItem? {
