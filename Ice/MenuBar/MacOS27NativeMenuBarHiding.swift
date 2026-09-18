@@ -158,19 +158,31 @@ final class MacOS27NativeMenuBarHiding {
         screen: NSScreen
     ) async -> Bool {
         let base = "Ice.NativeBoundary.\(section.rawValue).v2"
+        // AppKit rewrites "NSStatusItem Preferred Position <autosaveName>"
+        // with its own bookkeeping at launch, so the winning value lives
+        // under a key of our own.
+        let memoryKey = "Ice.NativeBoundary.\(section.rawValue).reinsertPosition"
         var low: CGFloat = 0
         var high: CGFloat = screen.frame.width
-        var probe = (UserDefaults.standard.object(forKey: "NSStatusItem Preferred Position \(base)") as? Double)
-            .map { CGFloat($0) } ?? 221
-        for attempt in 0 ..< 12 {
+        let remembered = CGFloat(UserDefaults.standard.double(forKey: memoryKey))
+        var probe = remembered > 0 ? remembered : 221
+        for attempt in 0 ..< 16 {
             recreateSpacer(section: section, base: base, preferredPosition: probe)
-            do { try await Task.sleep(for: .milliseconds(350)) } catch { return false }
-            let items = MacOS27MenuBarItemProvider.ownMenuBarItems()
-            guard
-                let spacer = items.first(matching: .nativeBoundary(for: section)),
-                let ice = items.first(matching: controlItemTag),
-                spacer.bounds.width > 0, ice.bounds.width > 0
-            else {
+            // The bar animates the insertion; a frame can be missing or
+            // transitional (off the strip's row) for a few hundred ms.
+            var placed: (spacer: MenuBarItem, ice: MenuBarItem)?
+            for _ in 0 ..< 5 {
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return false }
+                let items = MacOS27MenuBarItemProvider.ownMenuBarItems()
+                if let spacer = items.first(matching: .nativeBoundary(for: section)),
+                   let ice = items.first(matching: controlItemTag),
+                   spacer.bounds.width > 0, ice.bounds.width > 0,
+                   abs(spacer.bounds.midY - ice.bounds.midY) < 1 {
+                    placed = (spacer, ice)
+                    break
+                }
+            }
+            guard let (spacer, ice) = placed else {
                 logger.notice("Reinsertion probe \(attempt) at \(probe): frames unavailable")
                 continue
             }
@@ -180,6 +192,7 @@ final class MacOS27NativeMenuBarHiding {
                 low = probe
             } else if gap <= 8 {
                 logger.notice("Spacer reinserted beside Ice's button at preferred position \(probe) (attempt \(attempt))")
+                UserDefaults.standard.set(Double(probe), forKey: memoryKey)
                 showNarrow(spacers[section]!.item)
                 return true
             } else {
@@ -207,8 +220,6 @@ final class MacOS27NativeMenuBarHiding {
         spacerGeneration += 1
         let name = "\(base).g\(spacerGeneration)"
         UserDefaults.standard.set(preferredPosition, forKey: "NSStatusItem Preferred Position \(name)")
-        // Remember the winning value under the base key for the next launch.
-        UserDefaults.standard.set(preferredPosition, forKey: "NSStatusItem Preferred Position \(base)")
         let item = NSStatusBar.system.statusItem(withLength: 8)
         item.autosaveName = name
         item.button?.title = ""
