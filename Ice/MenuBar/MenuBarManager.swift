@@ -127,16 +127,27 @@ final class MenuBarManager: ObservableObject {
         // Nothing else conceals in this mode.
         nativeHiding.setHidden(false, section: .hidden, anchorPosition: controlPosition, screen: screen)
         nativeHiding.setHidden(false, section: .alwaysHidden, anchorPosition: controlPosition, screen: screen)
-        let hidden = hideHidden && !macOS27Controller.isLayoutEditing
+        // An Ice Bar reveal must not re-allow apps (that costs two agent
+        // restarts); only the section's own state counts here.
+        let hidden = section(withName: .hidden)?.isHidden == true && !macOS27Controller.isLayoutEditing
         var apps = Set<String>()
         if hidden {
-            for item in cache[.hidden] where !item.isControlItem {
+            func bundleID(of item: MenuBarItem) -> String? {
                 let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID)
-                guard let id = app?.bundleIdentifier, id != Constants.bundleIdentifier else { continue }
-                apps.insert(id)
+                guard let id = app?.bundleIdentifier, id != Constants.bundleIdentifier else { return nil }
+                return id
             }
-            // Items already disallowed are no longer enumerated; keep them.
+            // Everything in the visible section stays allowed.
+            let visibleApps = Set(cache[.visible].compactMap(bundleID))
+            // Enumerated hidden items, apps already disallowed (no longer
+            // enumerated), and every running app the record knows about
+            // whose item Ice cannot enumerate (Passwords, helpers): if it is
+            // not in the visible section, the user put it left of the dot.
+            apps.formUnion(cache[.hidden].compactMap(bundleID))
             apps.formUnion(disallowedAppsMode.disallowedApps)
+            apps.formUnion(disallowedAppsMode.runningTrackedApps())
+            apps.subtract(visibleApps)
+            apps.remove(Constants.bundleIdentifier)
         }
         macOS27Controller.isConcealingItems = hidden
         logNativeVisibilityDecision("disallowed-apps mode: hidden=\(hidden), apps=\(apps.sorted().joined(separator: ","))")

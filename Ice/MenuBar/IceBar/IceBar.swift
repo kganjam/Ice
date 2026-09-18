@@ -485,6 +485,15 @@ private struct IceBarItemView: View {
             }
             menuBarManager.section(withName: section)?.hide()
             if #available(macOS 27.0, *) {
+                if MacOS27DisallowedAppsMode.isEnabled {
+                    // A disallowed item is not laid out and cannot be clicked;
+                    // the reveal path would re-allow everything (two agent
+                    // restarts, ~20 s). Activate the app instead.
+                    if let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID) {
+                        app.activate()
+                    }
+                    return
+                }
                 Task {
                     await itemManager.clickConcealedItem(item, with: .left)
                 }

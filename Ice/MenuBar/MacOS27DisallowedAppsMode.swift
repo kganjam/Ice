@@ -71,6 +71,32 @@ final class MacOS27DisallowedAppsMode: ObservableObject {
         return entries
     }
 
+    /// Apps in the record that are currently running, keyed by the record's
+    /// bundle identifier. An app's item may be published by a helper with
+    /// its own bundle id (`menuItemLocations`), so those are matched too.
+    func runningTrackedApps() -> Set<String> {
+        guard let entries = try? readRecord() else { return [] }
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        var result = Set<String>()
+        var index = 0
+        while index < entries.count {
+            defer { index += 1 }
+            guard let bundle = entries[index]["bundle"] as? [String: Any],
+                  let id = bundle["_0"] as? String, entries[index].count == 1 else { continue }
+            var candidates: Set<String> = [id]
+            if index + 1 < entries.count,
+               let locations = entries[index + 1]["menuItemLocations"] as? [[String: Any]] {
+                for location in locations {
+                    if let bundle = location["bundle"] as? [String: Any], let helper = bundle["_0"] as? String {
+                        candidates.insert(helper)
+                    }
+                }
+            }
+            if !candidates.isDisjoint(with: running) { result.insert(id) }
+        }
+        return result
+    }
+
     /// Bundle identifiers the record knows about.
     func trackedBundleIdentifiers() -> Set<String> {
         let entries: [[String: Any]]
