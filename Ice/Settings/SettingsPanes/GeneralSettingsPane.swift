@@ -72,7 +72,23 @@ struct GeneralSettingsPane: View {
         showIceIcon
         if settings.showIceIcon {
             iceIconPicker
+            iceIconScaleSlider
         }
+    }
+
+    @ViewBuilder
+    private var iceIconScaleSlider: some View {
+        LabeledContent {
+            IceSlider(
+                LocalizedStringKey("\(Int((settings.iceIconScale * 100).rounded()))%"),
+                value: $settings.iceIconScale,
+                in: 0.5...1.5,
+                step: 0.05
+            )
+        } label: {
+            Text("Icon size")
+        }
+        .annotation("How large the Ice icon is drawn in the menu bar.")
     }
 
     @ViewBuilder

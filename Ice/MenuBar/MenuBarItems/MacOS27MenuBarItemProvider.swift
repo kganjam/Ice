@@ -318,14 +318,14 @@ enum MacOS27MenuBarItemProvider {
             var identityDescendants: [UIElement]?
             let identifier: String?
             do {
-                if let ownIdentifier = nonEmpty(try child.attribute(.identifier)) {
+                if let ownIdentifier = stableIdentifier(try child.attribute(.identifier)) {
                     identifier = ownIdentifier
                 } else {
                     let descendants: [UIElement] = try child.arrayAttribute(.children) ?? []
                     identityDescendants = descendants
                     var descendantIdentifier: String?
                     for descendant in descendants {
-                        if let value = nonEmpty(try descendant.attribute(.identifier)) {
+                        if let value = stableIdentifier(try descendant.attribute(.identifier)) {
                             descendantIdentifier = value
                             break
                         }
@@ -515,6 +515,10 @@ enum MacOS27MenuBarItemProvider {
         guard let string else { return nil }
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func stableIdentifier(_ identifier: String?) -> String? {
+        MenuBarItemTag.stableIdentifier(identifier)
     }
 
     /// Returns whether a raw item is MenuBarAgent's overflow button. It has no

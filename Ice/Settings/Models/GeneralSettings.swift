@@ -27,6 +27,9 @@ final class GeneralSettings: ObservableObject {
     /// should be rendered as template images.
     @Published var customIceIconIsTemplate = false
 
+    /// A multiplier applied to the Ice icon's size in the menu bar.
+    @Published var iceIconScale: Double = 1
+
     /// A Boolean value that indicates whether to show hidden items
     /// in a separate bar below the menu bar.
     @Published var useIceBar = false
@@ -89,6 +92,7 @@ final class GeneralSettings: ObservableObject {
     private func loadInitialState() {
         Defaults.ifPresent(key: .showIceIcon, assign: &showIceIcon)
         Defaults.ifPresent(key: .customIceIconIsTemplate, assign: &customIceIconIsTemplate)
+        Defaults.ifPresent(key: .iceIconScale, assign: &iceIconScale)
         Defaults.ifPresent(key: .useIceBar, assign: &useIceBar)
         Defaults.ifPresent(key: .showOnClick, assign: &showOnClick)
         Defaults.ifPresent(key: .showOnHover, assign: &showOnHover)
@@ -154,6 +158,13 @@ final class GeneralSettings: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { isTemplate in
                 Defaults.set(isTemplate, forKey: .customIceIconIsTemplate)
+            }
+            .store(in: &c)
+
+        $iceIconScale
+            .receive(on: DispatchQueue.main)
+            .sink { scale in
+                Defaults.set(scale, forKey: .iceIconScale)
             }
             .store(in: &c)
 

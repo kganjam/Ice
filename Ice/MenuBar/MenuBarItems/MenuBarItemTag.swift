@@ -87,6 +87,18 @@ struct MenuBarItemTag: Hashable, CustomStringConvertible {
     private init(controlItem identifier: ControlItem.Identifier) {
         self.init(namespace: .ice, title: identifier.rawValue)
     }
+
+    /// The part of an accessibility identifier that names an item: its first
+    /// non-empty line. Some apps (OneDrive) expose their tooltip as the
+    /// identifier, "OneDrive — Personal\nLooking for changes…", where the
+    /// first line names the account and the rest is live status; using the
+    /// whole string would mint a new item on every status change.
+    static func stableIdentifier(_ identifier: String?) -> String? {
+        guard let identifier else { return nil }
+        let lines = identifier.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        return lines.first { !$0.isEmpty }
+    }
 }
 
 // MARK: MenuBarItemTag Constants

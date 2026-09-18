@@ -34,6 +34,18 @@ final class MacOS27AssessmentMode {
         UserDefaults.standard.bool(forKey: flagKey)
     }
 
+    /// Bundle identifiers that stay on the bar whenever the hidden section is
+    /// concealed, whatever the layout says. For apps Ice cannot enumerate
+    /// (no `AXExtrasMenuBar`, e.g. Parallels Desktop, MacMixer): they can't
+    /// be placed in the visible section, and an assertion would otherwise
+    /// remove them. `defaults write com.jordanbaird.Ice
+    /// MacOS27AssessmentAlwaysAllowed -array com.example.app …`
+    static let alwaysAllowedKey = "MacOS27AssessmentAlwaysAllowed"
+
+    static var alwaysAllowedBundleIDs: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: alwaysAllowedKey) ?? [])
+    }
+
     private let logger = Logger(category: "MacOS27AssessmentMode")
 
     private var assertion: AnyObject?

@@ -171,6 +171,7 @@ final class MenuBarManager: ObservableObject {
             return
         }
         var allowed: Set<String> = [Constants.bundleIdentifier]
+        allowed.formUnion(MacOS27AssessmentMode.alwaysAllowedBundleIDs)
         for item in cache[.visible] where !item.isControlItem {
             let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID)
             if let id = app?.bundleIdentifier { allowed.insert(id) }

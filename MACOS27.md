@@ -186,3 +186,17 @@ Control Center); Spotlight, user switching, Siri and the like are hidden
 with the rest. The allow-list is matched through LaunchServices, so an app
 run from outside /Applications (a DerivedData build) is hidden even when
 listed.
+
+Apps Ice cannot enumerate (no `AXExtrasMenuBar`: Parallels Desktop,
+MacMixer) never reach the visible section, so an assertion removes them.
+Keep them on the bar with
+`defaults write com.jordanbaird.Ice MacOS27AssessmentAlwaysAllowed -array com.parallels.desktop.console com.macmixer.app`
+(read on every hide, no relaunch).
+
+### Item identity
+
+An item's persisted identity is its accessibility identifier, or a
+per-session runtime identity when it has none. OneDrive exposes its tooltip
+as the identifier ("OneDrive — Personal\nLooking for changes…"), so only
+the first line is used; earlier layouts with one entry per status text are
+collapsed on the next scan.

@@ -316,8 +316,8 @@ final class ControlItem {
                     .store(in: &c)
 
                 appState.settings.general.$iceIcon
-                    .combineLatest(appState.settings.general.$customIceIconIsTemplate)
-                    .removeDuplicates()
+                    .combineLatest(appState.settings.general.$customIceIconIsTemplate, appState.settings.general.$iceIconScale)
+                    .removeDuplicates { $0 == $1 }
                     .receive(on: DispatchQueue.main)
                     .sink { [weak self] _ in
                         self?.updateStatusItem()
@@ -418,6 +418,12 @@ final class ControlItem {
                 let originalHeight = originalImage.size.height
                 let ratio = max(originalWidth / 25, originalHeight / 17)
                 let newSize = CGSize(width: originalWidth / ratio, height: originalHeight / ratio)
+                image = originalImage.resized(to: newSize)
+            }
+
+            let scale = appState.settings.general.iceIconScale
+            if scale != 1, scale > 0, let originalImage = image {
+                let newSize = CGSize(width: originalImage.size.width * scale, height: originalImage.size.height * scale)
                 image = originalImage.resized(to: newSize)
             }
 

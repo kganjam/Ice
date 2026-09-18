@@ -96,6 +96,7 @@ final class MacOS27MenuBarController {
     ) -> MenuBarItemManager.ItemCache {
         precondition(Thread.isMainThread)
         migrateTextInputIdentityIfNeeded(in: liveItems)
+        migrateMultilineIdentitiesIfNeeded(in: liveItems)
         seedUnassignedItems(liveItems, using: sourceItems)
         if !isReorderInProgress,
            let iceItem = sourceItems.first(matching: .visibleControlItem) {
@@ -495,41 +496,68 @@ final class MacOS27MenuBarController {
     /// Item-N identity without changing the user's section or position.
     private func migrateTextInputIdentityIfNeeded(in items: [MenuBarItem]) {
         for item in items where item.tag.namespace == .textInputMenuAgent {
-            let canonicalIdentifier = item.tag.persistentIdentifier
             let namespacePrefix = "\(item.tag.namespace):"
             let instanceSuffix = "#\(item.tag.instanceIndex)"
             let aliases = Set(layout.assignments.keys.filter {
                 $0.hasPrefix(namespacePrefix) && $0.hasSuffix(instanceSuffix)
-            }).union([canonicalIdentifier])
-            guard aliases.contains(where: { $0 != canonicalIdentifier }) else { continue }
-
-            var savedLocation: (section: MenuBarSection.Name, index: Int)?
-            for section in MenuBarSection.Name.allCases {
-                if let index = layout.order[section, default: []].firstIndex(where: aliases.contains) {
-                    savedLocation = (section, index)
-                    break
-                }
+            })
+            if collapse(aliases: aliases, into: item.tag.persistentIdentifier) {
+                logger.notice("Migrated Text Input menu bar identity to \(item.tag.persistentIdentifier, privacy: .public)")
             }
-            let section = savedLocation?.section
-                ?? layout.assignments[canonicalIdentifier]
-                ?? aliases.compactMap { layout.assignments[$0] }.first
-                ?? .visible
-
-            for alias in aliases {
-                layout.assignments.removeValue(forKey: alias)
-            }
-            layout.assignments[canonicalIdentifier] = section
-
-            for existingSection in MenuBarSection.Name.allCases {
-                layout.order[existingSection, default: []].removeAll(where: aliases.contains)
-            }
-            let insertionIndex = min(
-                savedLocation?.index ?? layout.order[section, default: []].endIndex,
-                layout.order[section, default: []].endIndex
-            )
-            layout.order[section, default: []].insert(canonicalIdentifier, at: insertionIndex)
-            logger.notice("Migrated Text Input menu bar identity to \(canonicalIdentifier, privacy: .public)")
         }
+    }
+
+    /// Collapses identities minted from multi-line accessibility identifiers
+    /// (OneDrive's "account\nstatus" tooltips) into the first-line identity
+    /// the provider now uses, keeping the user's section and position.
+    private func migrateMultilineIdentitiesIfNeeded(in items: [MenuBarItem]) {
+        for item in items where !item.tag.title.contains(where: \.isNewline) {
+            let namespacePrefix = "\(item.tag.namespace):"
+            let titlePrefix = "\(namespacePrefix)\(item.tag.title)"
+            let instanceSuffix = "#\(item.tag.instanceIndex)"
+            let aliases = Set(layout.assignments.keys.filter { key in
+                key.hasPrefix(namespacePrefix) && key.hasSuffix(instanceSuffix) &&
+                    MenuBarItemTag.stableIdentifier(String(key.dropLast(instanceSuffix.count))) == titlePrefix
+            })
+            if collapse(aliases: aliases, into: item.tag.persistentIdentifier) {
+                logger.notice("Collapsed \(aliases.count, privacy: .public) status-text identities into \(item.tag.persistentIdentifier, privacy: .public)")
+            }
+        }
+    }
+
+    /// Replaces every alias of an item in the persisted layout with its
+    /// canonical identifier, at the section and position of the first alias
+    /// found in the order. Returns whether anything changed.
+    private func collapse(aliases: Set<String>, into canonicalIdentifier: String) -> Bool {
+        let aliases = aliases.union([canonicalIdentifier])
+        guard aliases.contains(where: { $0 != canonicalIdentifier }) else { return false }
+
+        var savedLocation: (section: MenuBarSection.Name, index: Int)?
+        for section in MenuBarSection.Name.allCases {
+            if let index = layout.order[section, default: []].firstIndex(where: aliases.contains) {
+                savedLocation = (section, index)
+                break
+            }
+        }
+        let section = savedLocation?.section
+            ?? layout.assignments[canonicalIdentifier]
+            ?? aliases.compactMap { layout.assignments[$0] }.first
+            ?? .visible
+
+        for alias in aliases {
+            layout.assignments.removeValue(forKey: alias)
+        }
+        layout.assignments[canonicalIdentifier] = section
+
+        for existingSection in MenuBarSection.Name.allCases {
+            layout.order[existingSection, default: []].removeAll(where: aliases.contains)
+        }
+        let insertionIndex = min(
+            savedLocation?.index ?? layout.order[section, default: []].endIndex,
+            layout.order[section, default: []].endIndex
+        )
+        layout.order[section, default: []].insert(canonicalIdentifier, at: insertionIndex)
+        return true
     }
 
     private static func isOrderedLeftToRight(_ lhs: MenuBarItem, _ rhs: MenuBarItem) -> Bool {
