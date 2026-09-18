@@ -51,9 +51,9 @@ final class IceBarColorManager: ObservableObject {
                         return
                     }
                     if #available(macOS 27.0, *) {
-                        // The strip capture is taken only while visible, so
-                        // refresh it on show; it applies the color itself.
+                        // Appearance-based color; nothing to sample.
                         updateWindowImage(for: screen)
+                        return
                     }
                     updateColorInfo(with: iceBarPanel.frame, screen: screen)
                 }
@@ -119,27 +119,15 @@ final class IceBarColorManager: ObservableObject {
             // The window-list capture below yields nothing on macOS 27, so
             // `colorInfo` stayed nil and the Ice Bar fell back to
             // `Color.defaultLayoutBar` (7 % white / 17 % black): a see-through
-            // bar with the hidden items drawn over whatever window sat under
-            // it. Sample the same display-strip screenshot the thumbnails use.
-            // Only while the bar is visible: this is a screen capture, and a
-            // capture every 5 s would keep macOS's recording indicator lit.
-            guard let iceBarPanel, iceBarPanel.isVisible else {
-                return
-            }
-            let displayID = screen.displayID
-            Task { @MainActor [weak self] in
-                guard
-                    let capture = await ScreenCapture.captureMenuBarDisplayStrip(displayID: displayID),
-                    let self,
-                    let iceBarPanel = self.iceBarPanel,
-                    iceBarPanel.isVisible,
-                    let screen = iceBarPanel.screen
-                else {
-                    return
-                }
-                self.windowImage = capture.image
-                self.updateColorInfo(with: iceBarPanel.frame, screen: screen)
-            }
+            // bar. Sampling the display strip instead followed the wallpaper
+            // (with "Show menu bar background" off the bar's top row is the
+            // wallpaper), so the bar came out white on a light desktop and
+            // dark on a dark one. Use the system appearance: the menu bar
+            // itself is near-black in dark mode and near-white in light mode.
+            let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let gray: CGFloat = isDark ? 0.09 : 0.94
+            let info = MenuBarAverageColorInfo(color: CGColor(gray: gray, alpha: 1), source: .menuBarWindow)
+            if colorInfo != info { colorInfo = info }
             return
         }
 

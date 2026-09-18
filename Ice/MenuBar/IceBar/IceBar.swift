@@ -530,8 +530,11 @@ private struct IceBarItemView: View {
         else {
             return nil
         }
-        icon.size = CGSize(width: 18, height: 18)
-        let image = NSImage(size: CGSize(width: 28, height: 22), flipped: false) { bounds in
+        // Same slot metrics as extracted glyphs (IceBarGlyphImages.centeredImage):
+        // a 16-pt icon matches the scale of menu bar glyphs, and the 30-pt
+        // slot gives app icons and glyphs the same gap.
+        icon.size = CGSize(width: 16, height: 16)
+        let image = NSImage(size: CGSize(width: 30, height: 22), flipped: false) { bounds in
             icon.draw(in: CGRect(
                 x: (bounds.width - icon.size.width) / 2,
                 y: (bounds.height - icon.size.height) / 2,
@@ -613,8 +616,10 @@ private enum IceBarGlyphImages {
             height: CGFloat(glyph.height) / scale
         )
         let horizontalPadding: CGFloat = 7
+        // Never narrower than an app-icon slot (30 pt), so narrow glyphs
+        // don't bunch up next to wider ones or the app-icon fallbacks.
         let slotSize = CGSize(
-            width: glyphSize.width + horizontalPadding * 2,
+            width: max(30, glyphSize.width + horizontalPadding * 2),
             height: max(22, glyphSize.height)
         )
         return NSImage(size: slotSize, flipped: false) { bounds in
