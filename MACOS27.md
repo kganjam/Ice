@@ -167,3 +167,22 @@ apps by icon; clicking one activates the app.
 Limits: only apps present in the record can be disallowed (MenuBarAgent's
 own modules, Apple apps that never registered there, and items Ice cannot
 enumerate stay visible; hide those in System Settings or the app itself).
+
+### Assessment mode (opt-in, live)
+
+`defaults write com.jordanbaird.Ice MacOS27AssessmentMode -bool true`
+(relaunch Ice). Takes precedence over the disallowed-apps mode.
+
+Uses `MBAssessmentModeAssertion` (private MenuBarClientCore framework, the
+allow-list mode baaar, Hidden and Bartender's macOS 27 builds use). Hiding
+activates an assertion that keeps Ice and the visible section's apps on the
+bar; MenuBarAgent removes every other app's items from the layout at once.
+No spacer, no «, no blank space, no restart, and apps that never registered
+in the Allow record (ChatGPT Classic) are hidden too. An Ice Bar reveal
+lifts the assertion, so click-through stays live. The assertion dies with
+Ice. Only nine system items survive an assertion (battery, Bluetooth,
+clock, displays, keyboard brightness, sound, Wi‑Fi, screen mirroring,
+Control Center); Spotlight, user switching, Siri and the like are hidden
+with the rest. The allow-list is matched through LaunchServices, so an app
+run from outside /Applications (a DerivedData build) is hidden even when
+listed.
