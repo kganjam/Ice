@@ -754,11 +754,12 @@ private enum IceBarGlyphImages {
     /// item frames with different vertical offsets, so crops taken from those
     /// frames place their glyphs at different heights.
     /// Menu bar glyphs are drawn at this multiple of their bar size.
-    static let tileScale: CGFloat = 1.2
+    static let tileScale: CGFloat = 1.3
     /// The minimum tile, shared with the app-icon tiles.
-    static let tileSlot = CGSize(width: 36, height: 24)
-    /// App icons in tiles are drawn this large.
-    static let appIconSize: CGFloat = 20
+    static let tileSlot = CGSize(width: 40, height: 28)
+    /// App icons in tiles are drawn this large. App icons carry their own
+    /// margins, so this reads a little smaller than a glyph of equal size.
+    static let appIconSize: CGFloat = 24
 
     private static func centeredImage(_ glyph: CGImage, scale: CGFloat) -> NSImage {
         // Drawn a little larger than in the menu bar (captures are 2x, so

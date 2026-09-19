@@ -178,7 +178,14 @@ final class MenuBarManager: ObservableObject {
         }
         logNativeVisibilityDecision("assessment mode: concealing all but \(allowed.sorted().joined(separator: ","))")
         Task { [weak self] in
-            await self?.assessmentMode.conceal(allowing: allowed)
+            guard let self else { return }
+            // Concealed items aren't drawn, so the Ice Bar can only show
+            // images captured while they are still on the bar. Without this
+            // every tile fell back to the app icon after a display change.
+            if let appState, appState.settings.general.useIceBar, !assessmentMode.isConcealing {
+                await appState.imageCache.captureMacOS27Images(for: .hidden, onlyIfMissing: true)
+            }
+            await assessmentMode.conceal(allowing: allowed)
         }
     }
 
