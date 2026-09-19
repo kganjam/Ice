@@ -579,6 +579,15 @@ final class ControlItem {
             return
         }
 
+        // A plain click while an Ice Bar click-through has the items revealed
+        // (another item's menu or window is open): close it and conceal
+        // again, rather than toggling the section.
+        if #available(macOS 27.0, *), modifierFlags.isEmpty, identifier == .visible,
+           menuBarManager.isIceBarRevealActive {
+            menuBarManager.cancelIceBarReveal()
+            return
+        }
+
         if
             modifierFlags == .option,
             let section = menuBarManager.section(withName: .alwaysHidden),

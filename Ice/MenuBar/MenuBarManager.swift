@@ -666,6 +666,21 @@ final class MenuBarManager: ObservableObject {
         syncNativeVisibility()
     }
 
+    /// Whether an Ice Bar click-through currently keeps the items revealed.
+    @available(macOS 27.0, *)
+    var isIceBarRevealActive: Bool { iceBarRevealDepth > 0 }
+
+    /// Cancels an Ice Bar click-through: closes what the clicked item
+    /// opened (by hiding its app) and conceals the items again. Clicking
+    /// Ice's button while another item's menu or window is open does this
+    /// instead of toggling the section.
+    @available(macOS 27.0, *)
+    func cancelIceBarReveal() {
+        appState?.itemManager.cancelConcealedClick()
+        iceBarRevealDepth = 0
+        syncNativeVisibility()
+    }
+
     /// A click after Layout toggles the actual, currently expanded bar.
     func prepareForControlToggle() {
         guard #available(macOS 27.0, *) else { return }

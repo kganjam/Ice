@@ -14,6 +14,12 @@ final class MenuBarItemManager: ObservableObject {
     /// The current cache of menu bar items.
     @Published private(set) var itemCache = ItemCache(displayID: nil)
 
+    /// The app(s) whose item the current Ice Bar click-through opened, so a
+    /// cancel can close what they opened (macOS 27).
+    var concealedClickOwnerPIDs = Set<pid_t>()
+    /// Set by `cancelConcealedClick()`; the click-through's window watch stops.
+    var concealedClickCancelled = false
+
     /// Logger for the menu bar item manager.
     private nonisolated let logger = Logger.menuBarItemManager
 
@@ -1355,6 +1361,17 @@ extension MenuBarItemManager {
     /// Concealed items aren't drawn anywhere, so the hidden items are revealed,
     /// the item is clicked where MenuBarAgent draws it, and the items are
     /// concealed again once the menu or window the click opened has closed.
+    /// Cancels the running click-through: the window watch stops and the
+    /// app whose menu or window is open is hidden, which closes it.
+    @available(macOS 27.0, *)
+    func cancelConcealedClick() {
+        for pid in concealedClickOwnerPIDs {
+            NSRunningApplication(processIdentifier: pid)?.hide()
+        }
+        concealedClickOwnerPIDs = []
+        concealedClickCancelled = true
+    }
+
     @available(macOS 27.0, *)
     func clickConcealedItem(_ item: MenuBarItem, with mouseButton: CGMouseButton) async {
         guard let appState else {
@@ -1363,9 +1380,12 @@ extension MenuBarItemManager {
         let menuBarManager = appState.menuBarManager
         let clock = ContinuousClock()
         let started = clock.now
+        concealedClickCancelled = false
         menuBarManager.beginIceBarReveal()
         defer {
-            menuBarManager.endIceBarReveal()
+            concealedClickOwnerPIDs = []
+            // A cancel already re-synced with the depth reset to zero.
+            if !concealedClickCancelled { menuBarManager.endIceBarReveal() }
         }
         logger.notice("Ice Bar click on \(item.logString, privacy: .public): reveal requested after \(started.duration(to: clock.now))")
 
@@ -1391,6 +1411,7 @@ extension MenuBarItemManager {
         }
 
         let windowsBeforeClick = Self.onScreenWindowIDs(ownedBy: ownerPIDs)
+        concealedClickOwnerPIDs = ownerPIDs
         do {
             try await postMacOS27Click(at: clickPoint, with: mouseButton)
         } catch {
@@ -1409,7 +1430,7 @@ extension MenuBarItemManager {
         let deadline = ContinuousClock.now + .seconds(120)
         var sawWindow = false
         var samplesWithoutWindow = 0
-        while ContinuousClock.now < deadline {
+        while ContinuousClock.now < deadline, !concealedClickCancelled {
             try? await Task.sleep(for: .milliseconds(200))
             let newWindows = Self.onScreenWindowIDs(ownedBy: ownerPIDs).subtracting(windowsBeforeClick)
             if newWindows.isEmpty {

@@ -67,12 +67,18 @@ extension ControlItemImage {
         let glyphBounds = (original.opaqueBounds ?? CGRect(origin: .zero, size: original.size))
             .insetBy(dx: -margin, dy: -margin)
             .intersection(CGRect(origin: .zero, size: original.size))
-        let size = CGSize(
-            width: (glyphBounds.width / ratio).rounded(.up),
-            height: (glyphBounds.height / ratio).rounded(.up)
-        )
+        // Integral canvas, glyph centred in it (the rounding slack would
+        // otherwise all land on one side and shift the glyph off centre).
+        let glyphSize = CGSize(width: glyphBounds.width / ratio, height: glyphBounds.height / ratio)
+        let size = CGSize(width: glyphSize.width.rounded(.up), height: glyphSize.height.rounded(.up))
         let image = NSImage(size: size, flipped: false) { bounds in
-            original.draw(in: bounds, from: glyphBounds, operation: .sourceOver, fraction: 1)
+            let drawRect = CGRect(
+                x: (bounds.width - glyphSize.width) / 2,
+                y: (bounds.height - glyphSize.height) / 2,
+                width: glyphSize.width,
+                height: glyphSize.height
+            )
+            original.draw(in: drawRect, from: glyphBounds, operation: .sourceOver, fraction: 1)
             return true
         }
         image.isTemplate = original.isTemplate

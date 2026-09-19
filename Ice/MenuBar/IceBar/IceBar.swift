@@ -229,6 +229,14 @@ final class IceBarPanel: NSPanel {
                 guard let self, isVisible, !frame.contains(NSEvent.mouseLocation) else {
                     return
                 }
+                // A mouse-down on Ice's own button must not close the bar
+                // here: the button's action fires on mouse-up and would then
+                // toggle the section back on, reopening the bar. Let the
+                // button's toggle do the closing.
+                if let iceButtonFrame = appState.menuBarManager.controlItem(withName: .visible)?.frame,
+                   iceButtonFrame.contains(NSEvent.mouseLocation) {
+                    return
+                }
                 hide()
             }
         }
@@ -557,11 +565,15 @@ private struct IceBarItemView: View {
         else {
             return nil
         }
-        // Same slot metrics as extracted glyphs (IceBarGlyphImages.centeredImage):
-        // a 16-pt icon matches the scale of menu bar glyphs, and the 30-pt
-        // slot gives app icons and glyphs the same gap.
-        icon.size = CGSize(width: 18, height: 18)
-        let image = NSImage(size: CGSize(width: 32, height: 22), flipped: false) { bounds in
+        // Same slot metrics as extracted glyphs (IceBarGlyphImages), so app
+        // icons and glyphs get the same size and gap.
+        if #available(macOS 27.0, *) {
+            icon.size = CGSize(width: IceBarGlyphImages.appIconSize, height: IceBarGlyphImages.appIconSize)
+        } else {
+            icon.size = CGSize(width: 18, height: 18)
+        }
+        let slot = if #available(macOS 27.0, *) { IceBarGlyphImages.tileSlot } else { CGSize(width: 32, height: 22) }
+        let image = NSImage(size: slot, flipped: false) { bounds in
             icon.draw(in: CGRect(
                 x: (bounds.width - icon.size.width) / 2,
                 y: (bounds.height - icon.size.height) / 2,
@@ -607,8 +619,8 @@ private struct IceBarDisallowedAppView: View {
             return nil
         }
         let icon = NSWorkspace.shared.icon(forFile: url.path)
-        icon.size = CGSize(width: 18, height: 18)
-        return NSImage(size: CGSize(width: 32, height: 22), flipped: false) { bounds in
+        icon.size = CGSize(width: IceBarGlyphImages.appIconSize, height: IceBarGlyphImages.appIconSize)
+        return NSImage(size: IceBarGlyphImages.tileSlot, flipped: false) { bounds in
             icon.draw(in: CGRect(
                 x: (bounds.width - icon.size.width) / 2,
                 y: (bounds.height - icon.size.height) / 2,
@@ -683,17 +695,26 @@ private enum IceBarGlyphImages {
     /// Draws a glyph centered in a slot of uniform height. Apps report status
     /// item frames with different vertical offsets, so crops taken from those
     /// frames place their glyphs at different heights.
+    /// Menu bar glyphs are drawn at this multiple of their bar size.
+    static let tileScale: CGFloat = 1.2
+    /// The minimum tile, shared with the app-icon tiles.
+    static let tileSlot = CGSize(width: 36, height: 24)
+    /// App icons in tiles are drawn this large.
+    static let appIconSize: CGFloat = 20
+
     private static func centeredImage(_ glyph: CGImage, scale: CGFloat) -> NSImage {
+        // Drawn a little larger than in the menu bar (captures are 2x, so
+        // this stays sharp), matching the 20-pt app-icon tiles.
         let glyphSize = CGSize(
-            width: CGFloat(glyph.width) / scale,
-            height: CGFloat(glyph.height) / scale
+            width: CGFloat(glyph.width) / scale * Self.tileScale,
+            height: CGFloat(glyph.height) / scale * Self.tileScale
         )
-        let horizontalPadding: CGFloat = 7
-        // Never narrower than an app-icon slot (30 pt), so narrow glyphs
-        // don't bunch up next to wider ones or the app-icon fallbacks.
+        let horizontalPadding: CGFloat = 8
+        // Never narrower than an app-icon slot, so narrow glyphs don't
+        // bunch up next to wider ones or the app-icon fallbacks.
         let slotSize = CGSize(
-            width: max(32, glyphSize.width + horizontalPadding * 2),
-            height: max(22, glyphSize.height)
+            width: max(Self.tileSlot.width, (glyphSize.width + horizontalPadding * 2).rounded(.up)),
+            height: max(Self.tileSlot.height, glyphSize.height.rounded(.up))
         )
         return NSImage(size: slotSize, flipped: false) { bounds in
             guard let context = NSGraphicsContext.current?.cgContext else {
