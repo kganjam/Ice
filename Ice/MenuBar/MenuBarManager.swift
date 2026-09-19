@@ -681,6 +681,13 @@ final class MenuBarManager: ObservableObject {
         syncNativeVisibility()
     }
 
+    /// Closes whatever the last Ice Bar click-through left open (a status
+    /// item's window that outlived the reveal). Returns whether it did.
+    @available(macOS 27.0, *)
+    func closeClickThroughWindows() async -> Bool {
+        await appState?.itemManager.closeClickThroughWindows() ?? false
+    }
+
     /// A click after Layout toggles the actual, currently expanded bar.
     func prepareForControlToggle() {
         guard #available(macOS 27.0, *) else { return }

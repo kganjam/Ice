@@ -582,10 +582,25 @@ final class ControlItem {
         // A plain click while an Ice Bar click-through has the items revealed
         // (another item's menu or window is open): close it and conceal
         // again, rather than toggling the section.
-        if #available(macOS 27.0, *), modifierFlags.isEmpty, identifier == .visible,
-           menuBarManager.isIceBarRevealActive {
-            menuBarManager.cancelIceBarReveal()
-            return
+        if #available(macOS 27.0, *), modifierFlags.isEmpty, identifier == .visible {
+            if menuBarManager.isIceBarRevealActive {
+                menuBarManager.cancelIceBarReveal()
+                return
+            }
+            // The reveal may already have ended while the window the click
+            // opened is still up (DisplayLink Manager's popover): close it
+            // and consume the click rather than opening the Ice Bar.
+            let itemManager = appState?.itemManager
+            if let itemManager, !itemManager.concealedClickOwnerPIDs.isEmpty {
+                Task { [weak self] in
+                    guard let menuBarManager = self?.appState?.menuBarManager else { return }
+                    if await menuBarManager.closeClickThroughWindows() { return }
+                    // Nothing was open: behave like a normal click.
+                    menuBarManager.prepareForControlToggle()
+                    menuBarManager.section(withName: .hidden)?.toggle()
+                }
+                return
+            }
         }
 
         if

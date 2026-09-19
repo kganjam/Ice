@@ -17,6 +17,8 @@ final class MenuBarItemManager: ObservableObject {
     /// The app(s) whose item the current Ice Bar click-through opened, so a
     /// cancel can close what they opened (macOS 27).
     var concealedClickOwnerPIDs = Set<pid_t>()
+    /// Windows that appeared after the click-through's click.
+    var concealedClickOpenedWindowIDs = Set<CGWindowID>()
     /// Set by `cancelConcealedClick()`; the click-through's window watch stops.
     var concealedClickCancelled = false
 
@@ -1361,15 +1363,44 @@ extension MenuBarItemManager {
     /// Concealed items aren't drawn anywhere, so the hidden items are revealed,
     /// the item is clicked where MenuBarAgent draws it, and the items are
     /// concealed again once the menu or window the click opened has closed.
-    /// Cancels the running click-through: the window watch stops and the
-    /// app whose menu or window is open is hidden, which closes it.
+    /// Cancels the running click-through: the window watch stops and what
+    /// the clicked item opened is closed.
     @available(macOS 27.0, *)
     func cancelConcealedClick() {
-        for pid in concealedClickOwnerPIDs {
-            NSRunningApplication(processIdentifier: pid)?.hide()
+        concealedClickCancelled = true
+        Task { await closeClickThroughWindows() }
+    }
+
+    /// Closes what the last click-through opened, if any of it is still on
+    /// screen. Hiding the app closes menus and ordinary windows; a status
+    /// item popover that stays up (DisplayLink Manager's) gets an Escape
+    /// aimed at that process alone. Returns whether anything was open.
+    @available(macOS 27.0, *)
+    @discardableResult
+    func closeClickThroughWindows() async -> Bool {
+        let pids = concealedClickOwnerPIDs
+        guard !pids.isEmpty else { return false }
+        let stillOpen = Self.onScreenWindowIDs(ownedBy: pids).intersection(concealedClickOpenedWindowIDs)
+        guard !stillOpen.isEmpty else {
+            concealedClickOwnerPIDs = []
+            concealedClickOpenedWindowIDs = []
+            return false
+        }
+        for pid in pids { NSRunningApplication(processIdentifier: pid)?.hide() }
+        try? await Task.sleep(for: .milliseconds(150))
+        if !Self.onScreenWindowIDs(ownedBy: pids).intersection(stillOpen).isEmpty,
+           let source = CGEventSource(stateID: .combinedSessionState),
+           let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 53, keyDown: true),
+           let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 53, keyDown: false) {
+            for pid in pids {
+                keyDown.postToPid(pid)
+                keyUp.postToPid(pid)
+            }
+            logger.notice("Sent Escape to \(pids.sorted().map(String.init).joined(separator: ","), privacy: .public) to close a click-through window")
         }
         concealedClickOwnerPIDs = []
-        concealedClickCancelled = true
+        concealedClickOpenedWindowIDs = []
+        return true
     }
 
     @available(macOS 27.0, *)
@@ -1381,9 +1412,11 @@ extension MenuBarItemManager {
         let clock = ContinuousClock()
         let started = clock.now
         concealedClickCancelled = false
+        concealedClickOpenedWindowIDs = []
         menuBarManager.beginIceBarReveal()
         defer {
-            concealedClickOwnerPIDs = []
+            // Owner pids and opened windows are kept so a later click on
+            // Ice's button can still close what this opened.
             // A cancel already re-synced with the depth reset to zero.
             if !concealedClickCancelled { menuBarManager.endIceBarReveal() }
         }
@@ -1441,6 +1474,7 @@ extension MenuBarItemManager {
             } else {
                 sawWindow = true
                 samplesWithoutWindow = 0
+                concealedClickOpenedWindowIDs.formUnion(newWindows)
             }
         }
     }
