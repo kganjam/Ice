@@ -58,8 +58,19 @@ extension ControlItemImage {
             return cached
         }
         let ratio = max(original.size.width / 25, original.size.height / 17)
-        let glyphBounds = original.opaqueBounds ?? CGRect(origin: .zero, size: original.size)
-        let size = CGSize(width: glyphBounds.width / ratio, height: glyphBounds.height / ratio)
+        // Keep one source pixel of margin around the opaque pixels: the
+        // anti-aliased rim of a round glyph sits below the crop's alpha
+        // threshold, and cropping it off left the Dot with a flat, clipped
+        // top edge once the icon size slider scaled it up.
+        let pixelsPerPoint = max(1, CGFloat(original.cgImage(forProposedRect: nil, context: nil, hints: nil)?.height ?? 1) / max(1, original.size.height))
+        let margin = 1 / pixelsPerPoint
+        let glyphBounds = (original.opaqueBounds ?? CGRect(origin: .zero, size: original.size))
+            .insetBy(dx: -margin, dy: -margin)
+            .intersection(CGRect(origin: .zero, size: original.size))
+        let size = CGSize(
+            width: (glyphBounds.width / ratio).rounded(.up),
+            height: (glyphBounds.height / ratio).rounded(.up)
+        )
         let image = NSImage(size: size, flipped: false) { bounds in
             original.draw(in: bounds, from: glyphBounds, operation: .sourceOver, fraction: 1)
             return true
