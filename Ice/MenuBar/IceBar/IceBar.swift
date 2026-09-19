@@ -317,8 +317,26 @@ private struct IceBarContentView: View {
     let screen: NSScreen
     let section: MenuBarSection.Name
 
+    /// Bumped after a drag reorder so the sorted list is recomputed.
+    @State private var orderVersion = 0
+
     private var items: [MenuBarItem] {
-        itemManager.itemCache.managedItems(for: section)
+        let cached = itemManager.itemCache.managedItems(for: section)
+        guard #available(macOS 27.0, *), section == .hidden else { return cached }
+        _ = orderVersion
+        return IceBarOrder.sorted(cached)
+    }
+
+    /// Moves the dragged tile in front of `target` and persists the order.
+    @available(macOS 27.0, *)
+    private func reorder(dragged draggedID: String, before target: MenuBarItem) {
+        var ids = items.map(\.tag.persistentIdentifier)
+        guard let from = ids.firstIndex(of: draggedID) else { return }
+        ids.remove(at: from)
+        let to = ids.firstIndex(of: target.tag.persistentIdentifier) ?? ids.count
+        ids.insert(draggedID, at: to)
+        IceBarOrder.save(ids)
+        orderVersion += 1
     }
 
     /// Apps the disallowed-apps mode hid whose items are no longer
@@ -454,7 +472,10 @@ private struct IceBarContentView: View {
                             itemManager: itemManager,
                             menuBarManager: menuBarManager,
                             item: item,
-                            section: section
+                            section: section,
+                            onDrop: { draggedID in
+                                if #available(macOS 27.0, *) { reorder(dragged: draggedID, before: item) }
+                            }
                         )
                     }
                     if #available(macOS 27.0, *), section == .hidden {
@@ -478,6 +499,39 @@ private struct IceBarContentView: View {
 
 // MARK: - IceBarItemView
 
+/// The Ice Bar's own tile order for the hidden section on macOS 27, kept
+/// in defaults. Items not in the list keep their menu bar order after the
+/// listed ones... in front, so a fresh item appears where it is.
+@available(macOS 27.0, *)
+enum IceBarOrder {
+    private static let key = "MacOS27IceBarOrder"
+
+    static func load() -> [String] {
+        UserDefaults.standard.stringArray(forKey: key) ?? []
+    }
+
+    static func save(_ ids: [String]) {
+        UserDefaults.standard.set(ids, forKey: key)
+    }
+
+    /// Stable sort: listed items in list order, the rest keep their order.
+    static func sorted(_ items: [MenuBarItem]) -> [MenuBarItem] {
+        let order = load()
+        guard !order.isEmpty else { return items }
+        let index = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
+        return items.enumerated().sorted { lhs, rhs in
+            let l = index[lhs.element.tag.persistentIdentifier]
+            let r = index[rhs.element.tag.persistentIdentifier]
+            switch (l, r) {
+            case let (l?, r?): return l < r
+            case (_?, nil): return true
+            case (nil, _?): return false
+            case (nil, nil): return lhs.offset < rhs.offset
+            }
+        }.map(\.element)
+    }
+}
+
 private struct IceBarItemView: View {
     @ObservedObject var imageCache: MenuBarItemImageCache
     @ObservedObject var itemManager: MenuBarItemManager
@@ -485,6 +539,9 @@ private struct IceBarItemView: View {
 
     let item: MenuBarItem
     let section: MenuBarSection.Name
+    /// Called with the dragged tile's identifier when another tile is
+    /// dropped onto this one (macOS 27 Ice Bar reordering).
+    var onDrop: ((String) -> Void)?
 
     private var leftClickAction: () -> Void {
         return { [weak itemManager, weak menuBarManager] in
@@ -594,7 +651,8 @@ private struct IceBarItemView: View {
                     IceBarItemClickView(
                         item: item,
                         leftClickAction: leftClickAction,
-                        rightClickAction: rightClickAction
+                        rightClickAction: rightClickAction,
+                        dropAction: onDrop
                     )
                 }
                 .accessibilityLabel(item.displayName)
@@ -779,29 +837,50 @@ private enum IceBarGlyphImages {
 
 // MARK: - IceBarItemClickView
 
+private extension NSView {
+    /// A bitmap of this view's contents within `rect` (in its own coordinates).
+    func snapshotImage(of rect: CGRect) -> NSImage? {
+        guard let rep = bitmapImageRepForCachingDisplay(in: rect) else { return nil }
+        cacheDisplay(in: rect, to: rep)
+        let image = NSImage(size: rect.size)
+        image.addRepresentation(rep)
+        return image
+    }
+}
+
 private struct IceBarItemClickView: NSViewRepresentable {
-    private final class Represented: NSView {
+    /// Pasteboard type carrying a dragged tile's persistent identifier.
+    static let dragType = NSPasteboard.PasteboardType("com.jordanbaird.Ice.bar-item")
+
+    private final class Represented: NSView, NSDraggingSource {
         let item: MenuBarItem
 
         let leftClickAction: () -> Void
         let rightClickAction: () -> Void
+        let dropAction: ((String) -> Void)?
 
         private var lastLeftMouseDownDate = Date.now
         private var lastRightMouseDownDate = Date.now
 
         private var lastLeftMouseDownLocation = CGPoint.zero
         private var lastRightMouseDownLocation = CGPoint.zero
+        private var isDragging = false
 
         init(
             item: MenuBarItem,
             leftClickAction: @escaping () -> Void,
-            rightClickAction: @escaping () -> Void
+            rightClickAction: @escaping () -> Void,
+            dropAction: ((String) -> Void)?
         ) {
             self.item = item
             self.leftClickAction = leftClickAction
             self.rightClickAction = rightClickAction
+            self.dropAction = dropAction
             super.init(frame: .zero)
             self.toolTip = item.displayName
+            if dropAction != nil {
+                registerForDraggedTypes([IceBarItemClickView.dragType])
+            }
         }
 
         @available(*, unavailable)
@@ -813,6 +892,39 @@ private struct IceBarItemClickView: NSViewRepresentable {
             super.mouseDown(with: event)
             lastLeftMouseDownDate = .now
             lastLeftMouseDownLocation = NSEvent.mouseLocation
+            isDragging = false
+        }
+
+        // MARK: Reordering by drag (macOS 27 Ice Bar)
+
+        override func mouseDragged(with event: NSEvent) {
+            super.mouseDragged(with: event)
+            guard dropAction != nil, !isDragging,
+                  lastLeftMouseDownLocation.distance(to: NSEvent.mouseLocation) >= 5 else { return }
+            isDragging = true
+            let pasteboardItem = NSPasteboardItem()
+            pasteboardItem.setString(item.tag.persistentIdentifier, forType: IceBarItemClickView.dragType)
+            let draggingItem = NSDraggingItem(pasteboardWriter: pasteboardItem)
+            // The tile's image lives in the SwiftUI view underneath; snapshot
+            // the superview region so the drag shows the icon, not a blank.
+            let image = superview.flatMap { $0.snapshotImage(of: frame) } ?? NSImage(size: bounds.size)
+            draggingItem.setDraggingFrame(bounds, contents: image)
+            beginDraggingSession(with: [draggingItem], event: event, source: self)
+        }
+
+        func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+            context == .withinApplication ? .move : []
+        }
+
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            sender.draggingPasteboard.string(forType: IceBarItemClickView.dragType) == nil ? [] : .move
+        }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            guard let id = sender.draggingPasteboard.string(forType: IceBarItemClickView.dragType),
+                  id != item.tag.persistentIdentifier, let dropAction else { return false }
+            dropAction(id)
+            return true
         }
 
         override func rightMouseDown(with event: NSEvent) {
@@ -848,12 +960,14 @@ private struct IceBarItemClickView: NSViewRepresentable {
 
     let leftClickAction: () -> Void
     let rightClickAction: () -> Void
+    var dropAction: ((String) -> Void)?
 
     func makeNSView(context: Context) -> NSView {
         Represented(
             item: item,
             leftClickAction: leftClickAction,
-            rightClickAction: rightClickAction
+            rightClickAction: rightClickAction,
+            dropAction: dropAction
         )
     }
 

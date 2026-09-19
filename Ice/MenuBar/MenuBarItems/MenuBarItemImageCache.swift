@@ -349,14 +349,33 @@ final class MenuBarItemImageCache: ObservableObject {
             }
 
             // Some owners report a frame a few points narrower than the glyph
-            // they draw (a play button lost its left edge). Items sit ≥8 pt
-            // apart, so 3 pt of slack per side stays clear of neighbours; the
-            // glyph extraction trims transparent margins afterwards.
+            // they draw (a play button lost its left edge), so allow 3 pt of
+            // slack per side, but never into a neighbour: reported frames
+            // can touch or even overlap (OneDrive 1802–1840 next to
+            // DisplayLink 1838–1872), and a crop that reached across put a
+            // sliver of one icon on the other's tile. Stop at the neighbour's
+            // edge, or at the midpoint of an overlap.
             let cropSlack: CGFloat = 3
+            var cropMinX = bounds.minX - cropSlack
+            var cropMaxX = bounds.maxX + cropSlack
+            for other in items where other.tag != item.tag && other.isOnScreen && !other.bounds.isEmpty {
+                if other.bounds.midX < bounds.midX {
+                    let limit = other.bounds.maxX > bounds.minX
+                        ? (other.bounds.maxX + bounds.minX) / 2
+                        : other.bounds.maxX + 1
+                    cropMinX = max(cropMinX, limit)
+                } else {
+                    let limit = other.bounds.minX < bounds.maxX
+                        ? (other.bounds.minX + bounds.maxX) / 2
+                        : other.bounds.minX - 1
+                    cropMaxX = min(cropMaxX, limit)
+                }
+            }
+            guard cropMaxX - cropMinX >= 8 else { continue }
             let expectedCropRect = CGRect(
-                x: (bounds.minX - cropSlack - capture.windowFrame.minX) * capture.scale,
+                x: (cropMinX - capture.windowFrame.minX) * capture.scale,
                 y: (bounds.minY - capture.windowFrame.minY) * capture.scale,
-                width: (bounds.width + cropSlack * 2) * capture.scale,
+                width: (cropMaxX - cropMinX) * capture.scale,
                 height: bounds.height * capture.scale
             ).integral
             let cropRect = expectedCropRect.intersection(imageBounds)
