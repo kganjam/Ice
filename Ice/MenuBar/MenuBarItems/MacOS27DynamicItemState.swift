@@ -59,6 +59,13 @@ enum MacOS27VisibleApps {
         }
         return result
     }
+
+    /// The same for apps whose items are all outside the visible section.
+    /// Their items aren't drawn while concealed, so one that (re)started
+    /// after the conceal is not enumerated until the items are revealed.
+    static func updatedHidden(_ remembered: Set<String>, observed: [String: Bool]) -> Set<String> {
+        updated(remembered, observed: observed.mapValues { !$0 })
+    }
 }
 
 /// A small, bounded map of AX-object equality to identities. Labels and frames

@@ -94,6 +94,8 @@ final class MenuBarManager: ObservableObject {
     /// in its own overflow is never drawn, and must not cause a reveal every
     /// time the Ice Bar opens.
     private var missingImageCaptureAttempts = Set<MenuBarItemTag>()
+    /// Processes of hidden apps whose items a reveal already tried to find.
+    private var unseenItemSearches = Set<pid_t>()
 
     /// The managed sections in the menu bar.
     let sections = [
@@ -211,8 +213,14 @@ final class MenuBarManager: ObservableObject {
             if item.tag.namespace == .controlCenter, !MacOS27SystemItems.isKeptWhileConcealed(item.tag.title) {
                 notKept.insert(item.tag)
             }
-            guard let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID),
-                  let id = app.bundleIdentifier else { continue }
+            guard let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID) else {
+                continue
+            }
+            guard let id = app.bundleIdentifier else {
+                // Nothing to name in the allow-list (ChatGPT Classic's helper).
+                notKept.insert(item.tag)
+                continue
+            }
             allowed.insert(id)
             if !assessmentMode.canKeepOnBar(app) { notKept.insert(item.tag) }
         }
@@ -273,6 +281,9 @@ final class MenuBarManager: ObservableObject {
         if item.tag.namespace == .controlCenter, !MacOS27SystemItems.isKeptWhileConcealed(item.tag.title) {
             notes.append("While Ice hides items, macOS keeps only \(MacOS27SystemItems.keptWhileConcealedNames) on the bar, so \(name) is hidden then\(isVisible ? " and listed in the Ice Bar" : ""), wherever it sits.")
         } else if let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID),
+                  app.bundleIdentifier == nil {
+            notes.append("\(name) belongs to a process without a bundle identifier, which macOS's list of apps to keep on the bar can't name, so it is hidden while Ice hides items\(isVisible ? " and listed in the Ice Bar" : "").")
+        } else if let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID),
                   let copy = assessmentMode.launchServicesCopy(ifNot: app) {
             notes.append("This copy of \(app.localizedName ?? name) runs from \(app.bundleURL?.path ?? "?"), but macOS knows the app as \(copy.path) and keeps only that copy on the bar while Ice hides items, so this one is hidden then\(isVisible ? " and listed in the Ice Bar" : "").")
         }
@@ -292,18 +303,44 @@ final class MenuBarManager: ObservableObject {
         let missing = iceBarItems(for: section).filter {
             appState.imageCache.images[$0.tag] == nil && !missingImageCaptureAttempts.contains($0.tag)
         }
-        guard !missing.isEmpty else { return }
+        // A hidden app that started (or restarted) after the conceal has an
+        // item that was never drawn, so it isn't enumerated at all.
+        let unseen = section == .hidden && MacOS27AssessmentMode.isEnabled ? unseenHiddenApps() : []
+        guard !missing.isEmpty || !unseen.isEmpty else { return }
         if missingImageCaptureAttempts.count > 512 { missingImageCaptureAttempts.removeAll() }
         missingImageCaptureAttempts.formUnion(missing.map(\.tag))
-        logger.notice("Ice Bar: \(missing.count, privacy: .public) tiles have no image; revealing to capture them")
+        if unseenItemSearches.count > 512 { unseenItemSearches.removeAll() }
+        unseenItemSearches.formUnion(unseen.map(\.processIdentifier))
+        logger.notice("Ice Bar: \(missing.count, privacy: .public) tiles have no image, \(unseen.count, privacy: .public) hidden apps no item (\(unseen.compactMap(\.bundleIdentifier).joined(separator: ","), privacy: .public)); revealing to capture them")
         Task { [weak self] in
             guard let self else { return }
             beginIceBarReveal()
             defer { endIceBarReveal() }
+            if !unseen.isEmpty {
+                try? await Task.sleep(for: .milliseconds(400))
+                await appState.itemManager.cacheItemsRegardless(ignoringRecentMovement: true, refreshingAllOwners: true)
+            }
             for delay in [350, 450, 600] {
                 try? await Task.sleep(for: .milliseconds(delay))
                 if await appState.imageCache.captureMacOS27Images(for: section, onlyIfMissing: false) { break }
             }
+        }
+    }
+
+    /// Running apps remembered as hidden that have no item in the cache, and
+    /// that no reveal has looked for yet.
+    @available(macOS 27.0, *)
+    private func unseenHiddenApps() -> [NSRunningApplication] {
+        let hiddenApps = macOS27Controller.rememberedHiddenApps
+        guard !hiddenApps.isEmpty, let cache = appState?.itemManager.itemCache else { return [] }
+        let cachedApps = Set(cache.managedItems.flatMap { item in
+            [item.sourceApplication?.bundleIdentifier, item.owningApplication?.bundleIdentifier, item.tag.namespace.description]
+                .compactMap { $0 }
+        })
+        return NSWorkspace.shared.runningApplications.filter { app in
+            guard let id = app.bundleIdentifier else { return false }
+            return hiddenApps.contains(id) && !cachedApps.contains(id) &&
+                !unseenItemSearches.contains(app.processIdentifier)
         }
     }
 

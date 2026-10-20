@@ -90,6 +90,12 @@ enum MacOS27DynamicItemStateTests {
         check(visibleApps == ["a", "b"], "an app that came back visible is added")
         visibleApps = MacOS27VisibleApps.updated(visibleApps, observed: ["a": false])
         check(visibleApps == ["b"], "an app moved out of the visible section is forgotten")
+        var hiddenApps = MacOS27VisibleApps.updatedHidden([], observed: ["a": false, "b": true])
+        check(hiddenApps == ["a"], "an app with only hidden items is remembered as hidden")
+        hiddenApps = MacOS27VisibleApps.updatedHidden(hiddenApps, observed: [:])
+        check(hiddenApps == ["a"], "a hidden app that restarted stays remembered")
+        hiddenApps = MacOS27VisibleApps.updatedHidden(hiddenApps, observed: ["a": true])
+        check(hiddenApps.isEmpty, "a hidden app moved to the visible section is forgotten")
 
         check(MacOS27SystemItems.isKeptWhileConcealed("com.apple.menuextra.sound"),
               "an assertion keeps Sound")

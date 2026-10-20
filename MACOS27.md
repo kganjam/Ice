@@ -241,6 +241,12 @@ concealed has a new identity, and its item is drawn (and so enumerated and
 classified) only if the app is still allowed. Before 0.12.0-macos27.129 such
 an app dropped out of the allow-list and stayed hidden until Layout was opened.
 An app leaves the memory when none of its items is in the visible section.
+Apps whose items are all hidden are remembered too (`hiddenApps`): one that
+starts after the conceal (at login, or after an update) has an item that was
+never drawn and so isn't enumerated, and opening the Ice Bar then reveals the
+items once for that process to find and capture it. Items whose process has
+no bundle identifier (ChatGPT Classic's helper) can't be allowed at all and
+are listed in the Ice Bar when they are in the visible section.
 
 Apps Ice cannot enumerate (no `AXExtrasMenuBar`: Parallels Desktop,
 MacMixer) never reach the visible section, so an assertion removes them.

@@ -17,6 +17,8 @@ final class MacOS27MenuBarController {
         /// Bundle identifiers of apps with an item in the visible section.
         /// Unlike runtime assignments, kept across Ice launches.
         var visibleApps: Set<String>?
+        /// Bundle identifiers of apps whose items are all hidden.
+        var hiddenApps: Set<String>?
     }
 
     // v3 discards layouts that included Ice's own visible control item. The Ice
@@ -498,6 +500,12 @@ final class MacOS27MenuBarController {
         layout.visibleApps ?? []
     }
 
+    /// Apps whose items are all hidden, including apps whose items can't be
+    /// enumerated right now.
+    var rememberedHiddenApps: Set<String> {
+        layout.hiddenApps ?? []
+    }
+
     /// A Layout move changes an app's section before the next enumeration;
     /// the allow-list must follow at once.
     private func rememberVisibleAppsAfterMove() {
@@ -521,6 +529,7 @@ final class MacOS27MenuBarController {
             logger.notice("Apps in the visible section: \(updated.sorted().joined(separator: ","), privacy: .public)")
         }
         layout.visibleApps = updated
+        layout.hiddenApps = MacOS27VisibleApps.updatedHidden(layout.hiddenApps ?? [], observed: observed)
     }
 
     private func persist() {
