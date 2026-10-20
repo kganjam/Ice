@@ -9,11 +9,55 @@ import Foundation
 /// Runtime identities are deliberately not restored across Ice launches. An
 /// unidentified AX item must be classified from the native bar again instead
 /// of inheriting the assignment of an unrelated item with the same label.
+/// Only per-app facts (`MacOS27VisibleApps`) and the Ice Bar's tile order
+/// (`sessionIndependentKeys`) outlive them.
 enum MacOS27RuntimeItemIdentity {
     static let prefix = "Ice.RuntimeItem."
 
     static func isStoredIdentifier(_ identifier: String) -> Bool {
         identifier.contains(":\(prefix)")
+    }
+
+    /// Keys that survive Ice launches, for orders Ice keeps across them. A
+    /// runtime identity becomes its owner plus its ordinal among that owner's
+    /// runtime items in `identifiers`; any other identifier is its own key.
+    static func sessionIndependentKeys(_ identifiers: [String]) -> [String: String] {
+        var ordinals = [Substring: Int]()
+        var keys = [String: String]()
+        for identifier in identifiers {
+            guard let range = identifier.range(of: ":\(prefix)") else {
+                keys[identifier] = identifier
+                continue
+            }
+            let owner = identifier[..<range.lowerBound]
+            let ordinal = ordinals[owner, default: 0]
+            ordinals[owner] = ordinal + 1
+            keys[identifier] = "\(owner):Ice.RuntimeItem@\(ordinal)"
+        }
+        return keys
+    }
+}
+
+/// The apps that own an item in the visible section, remembered by bundle
+/// identifier. While an assessment-mode assertion conceals the hidden
+/// section, MenuBarAgent draws only allowed apps' items, and Ice can only
+/// enumerate and classify an item that is drawn. An app restarted while
+/// concealed comes back with a new runtime identity, so without this memory
+/// it dropped out of the allow-list and never came back.
+enum MacOS27VisibleApps {
+    /// Folds one enumeration into the remembered set. `observed` maps each
+    /// app seen in this pass to whether any of its items is in the visible
+    /// section. Apps not seen (quit, or not drawn) keep their last state.
+    static func updated(_ remembered: Set<String>, observed: [String: Bool]) -> Set<String> {
+        var result = remembered
+        for (app, isVisible) in observed {
+            if isVisible {
+                result.insert(app)
+            } else {
+                result.remove(app)
+            }
+        }
+        return result
     }
 }
 

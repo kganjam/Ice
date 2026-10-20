@@ -222,6 +222,10 @@ final class IceBarPanel: NSPanel {
 
         orderFrontRegardless()
 
+        if #available(macOS 27.0, *) {
+            appState.menuBarManager.captureMissingIceBarImages(for: section)
+        }
+
         if #available(macOS 27.0, *), outsideClickMonitor == nil {
             outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
                 matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
@@ -320,8 +324,13 @@ private struct IceBarContentView: View {
     /// Bumped after a drag reorder so the sorted list is recomputed.
     @State private var orderVersion = 0
 
+    /// The section's items in menu bar order.
+    private var menuBarOrderedItems: [MenuBarItem] {
+        menuBarManager.iceBarItems(for: section)
+    }
+
     private var items: [MenuBarItem] {
-        let cached = itemManager.itemCache.managedItems(for: section)
+        let cached = menuBarOrderedItems
         guard #available(macOS 27.0, *), section == .hidden else { return cached }
         _ = orderVersion
         return IceBarOrder.sorted(cached)
@@ -335,7 +344,7 @@ private struct IceBarContentView: View {
         ids.remove(at: from)
         let to = ids.firstIndex(of: target.tag.persistentIdentifier) ?? ids.count
         ids.insert(draggedID, at: to)
-        IceBarOrder.save(ids)
+        IceBarOrder.save(ids, menuBarOrder: menuBarOrderedItems.map(\.tag.persistentIdentifier))
         orderVersion += 1
     }
 
@@ -500,28 +509,43 @@ private struct IceBarContentView: View {
 // MARK: - IceBarItemView
 
 /// The Ice Bar's own tile order for the hidden section on macOS 27, kept
-/// in defaults. Items not in the list keep their menu bar order after the
-/// listed ones... in front, so a fresh item appears where it is.
+/// in defaults. Listed items come first, in list order; the rest keep their
+/// menu bar order after them. Items with a runtime identity are stored by
+/// app and ordinal (`MacOS27RuntimeItemIdentity.sessionIndependentKeys`),
+/// because their identities change every time Ice or the app starts.
 @available(macOS 27.0, *)
 enum IceBarOrder {
     private static let key = "MacOS27IceBarOrder"
 
+    /// The saved order. Entries saved by older builds as runtime identities
+    /// are read as their session-independent keys.
     static func load() -> [String] {
-        UserDefaults.standard.stringArray(forKey: key) ?? []
+        let saved = UserDefaults.standard.stringArray(forKey: key) ?? []
+        let keys = MacOS27RuntimeItemIdentity.sessionIndependentKeys(saved)
+        return saved.map { keys[$0] ?? $0 }
     }
 
-    static func save(_ ids: [String]) {
-        UserDefaults.standard.set(ids, forKey: key)
+    /// Saves `ids` (Ice Bar order). `menuBarOrder` numbers each app's runtime
+    /// items, the same way `sorted` does.
+    static func save(_ ids: [String], menuBarOrder: [String]) {
+        let keys = MacOS27RuntimeItemIdentity.sessionIndependentKeys(menuBarOrder)
+        UserDefaults.standard.set(ids.map { keys[$0] ?? $0 }, forKey: key)
     }
 
     /// Stable sort: listed items in list order, the rest keep their order.
+    /// `items` must be in menu bar order.
     static func sorted(_ items: [MenuBarItem]) -> [MenuBarItem] {
         let order = load()
         guard !order.isEmpty else { return items }
-        let index = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
+        let index = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let keys = MacOS27RuntimeItemIdentity.sessionIndependentKeys(items.map(\.tag.persistentIdentifier))
+        func position(of item: MenuBarItem) -> Int? {
+            let identifier = item.tag.persistentIdentifier
+            return index[keys[identifier] ?? identifier]
+        }
         return items.enumerated().sorted { lhs, rhs in
-            let l = index[lhs.element.tag.persistentIdentifier]
-            let r = index[rhs.element.tag.persistentIdentifier]
+            let l = position(of: lhs.element)
+            let r = position(of: rhs.element)
             switch (l, r) {
             case let (l?, r?): return l < r
             case (_?, nil): return true

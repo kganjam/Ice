@@ -56,6 +56,41 @@ enum MacOS27DynamicItemStateTests {
         check(!MacOS27RuntimeItemIdentity.isStoredIdentifier("com.apple.controlcenter:com.apple.menuextra.wifi#0"),
               "deterministic system assignments are not treated as runtime tokens")
 
+        let oldSession = [
+            "com.example.tool:Ice.RuntimeItem.AAAA.3#0",
+            "com.apple.controlcenter:com.apple.menuextra.wifi#0",
+            "com.example.multi:Ice.RuntimeItem.AAAA.4#0",
+            "com.example.multi:Ice.RuntimeItem.AAAA.5#0",
+        ]
+        let newSession2 = [
+            "com.example.multi:Ice.RuntimeItem.BBBB.0#0",
+            "com.example.tool:Ice.RuntimeItem.BBBB.1#0",
+            "com.example.multi:Ice.RuntimeItem.BBBB.2#0",
+            "com.apple.controlcenter:com.apple.menuextra.wifi#0",
+        ]
+        let oldKeys = MacOS27RuntimeItemIdentity.sessionIndependentKeys(oldSession)
+        let newKeys = MacOS27RuntimeItemIdentity.sessionIndependentKeys(newSession2)
+        check(oldKeys[oldSession[0]] == newKeys[newSession2[1]],
+              "an app's runtime item keeps its Ice Bar key across Ice sessions")
+        check(oldKeys[oldSession[2]] == newKeys[newSession2[0]] && oldKeys[oldSession[3]] == newKeys[newSession2[2]],
+              "an app's runtime items are told apart by their order")
+        check(oldKeys[oldSession[1]] == oldSession[1],
+              "a stable identifier is its own key")
+        check(!MacOS27RuntimeItemIdentity.isStoredIdentifier(oldKeys[oldSession[0]]!),
+              "a session-independent key is not mistaken for a runtime identity")
+        let rekeyed = oldSession.map { oldKeys[$0]! }
+        check(MacOS27RuntimeItemIdentity.sessionIndependentKeys(rekeyed).allSatisfy { $0.key == $0.value },
+              "session-independent keys map to themselves")
+
+        var visibleApps = MacOS27VisibleApps.updated([], observed: ["a": true, "b": false])
+        check(visibleApps == ["a"], "an app with a visible item is remembered")
+        visibleApps = MacOS27VisibleApps.updated(visibleApps, observed: [:])
+        check(visibleApps == ["a"], "an app that quit or isn't drawn stays remembered")
+        visibleApps = MacOS27VisibleApps.updated(visibleApps, observed: ["b": true])
+        check(visibleApps == ["a", "b"], "an app that came back visible is added")
+        visibleApps = MacOS27VisibleApps.updated(visibleApps, observed: ["a": false])
+        check(visibleApps == ["b"], "an app moved out of the visible section is forgotten")
+
         var grace = MacOS27MissingItemGrace()
         check(!grace.needsVerification("plugin", canObserve: true, now: 0),
               "a first expanded omission keeps the tile")

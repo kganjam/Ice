@@ -51,6 +51,17 @@ final class MacOS27AssessmentMode {
     private var assertion: AnyObject?
     private(set) var allowedBundleIDs: Set<String> = []
     private var activating = false
+    /// Bumped by every reveal, so an activation that was still waiting for
+    /// MenuBarAgent when the reveal came doesn't conceal afterwards.
+    private var revealCount = 0
+    /// LaunchServices answers per process, cached by pid and launch date.
+    private var launchServicesCopies = [ProcessKey: URL?]()
+    private var reportedCopies = Set<String>()
+
+    private struct ProcessKey: Hashable {
+        let pid: pid_t
+        let launchDate: Date?
+    }
 
     /// Whether an assertion is currently live.
     var isConcealing: Bool { assertion != nil }
@@ -63,11 +74,17 @@ final class MacOS27AssessmentMode {
         guard !activating else { return assertion != nil }
         activating = true
         defer { activating = false }
+        let revealsBefore = revealCount
         // MenuBarAgent applies the newest assertion; invalidate the old one
         // after the new one is live so the bar doesn't flash expanded.
         let previous = assertion
         do {
             let token = try await MenuBarAssessmentAssertion27.activate(allowedBundleIDs: allowed.sorted())
+            guard revealCount == revealsBefore else {
+                MenuBarAssessmentAssertion27.invalidate(token)
+                logger.notice("Revealed while the assertion was activating; dropped it")
+                return false
+            }
             assertion = token
             allowedBundleIDs = allowed
             if let previous { MenuBarAssessmentAssertion27.invalidate(previous) }
@@ -81,11 +98,53 @@ final class MacOS27AssessmentMode {
 
     /// Lifts the assertion; every item returns to the bar.
     func reveal() {
+        revealCount &+= 1
         guard let assertion else { return }
         MenuBarAssessmentAssertion27.invalidate(assertion)
         self.assertion = nil
         allowedBundleIDs = []
         logger.notice("Revealed (assertion invalidated)")
+    }
+
+    /// Whether MenuBarAgent can keep `app`'s items on the bar through the
+    /// allow-list. It identifies a status item's app by bundle identifier
+    /// only for the copy LaunchServices resolves that identifier to; any
+    /// other copy (an Xcode DerivedData build of an app that is also in
+    /// /Applications, for example) is tracked by its executable path, as an
+    /// "adhocBinary" in Control Center's record, and an assertion removes it
+    /// even though its bundle identifier is allowed. Logs each such copy once.
+    func canKeepOnBar(_ app: NSRunningApplication) -> Bool {
+        let key = ProcessKey(pid: app.processIdentifier, launchDate: app.launchDate)
+        let resolved: URL?
+        if let cached = launchServicesCopies[key] {
+            resolved = cached
+        } else {
+            resolved = Self.otherLaunchServicesCopy(of: app)
+            if launchServicesCopies.count > 256 { launchServicesCopies.removeAll() }
+            launchServicesCopies[key] = resolved
+        }
+        guard let resolved else { return true }
+        let running = app.bundleURL?.path ?? "?"
+        if reportedCopies.insert("\(app.bundleIdentifier ?? "?")|\(running)").inserted {
+            logger.warning("\(app.bundleIdentifier ?? "?", privacy: .public) runs from \(running, privacy: .public), but LaunchServices resolves it to \(resolved.path, privacy: .public). MenuBarAgent can't keep this copy on the bar while Ice hides items, so the Ice Bar lists its items. Run the copy LaunchServices resolves to keep it on the bar.")
+        }
+        return false
+    }
+
+    /// The copy LaunchServices resolves `app`'s bundle identifier to, when
+    /// `app` is a different copy.
+    private static func otherLaunchServicesCopy(of app: NSRunningApplication) -> URL? {
+        guard
+            let bundleID = app.bundleIdentifier,
+            let running = app.bundleURL,
+            let resolved = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        else {
+            return nil
+        }
+        func canonical(_ url: URL) -> String {
+            url.resolvingSymlinksInPath().standardizedFileURL.path
+        }
+        return canonical(running) == canonical(resolved) ? nil : resolved
     }
 }
 

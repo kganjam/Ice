@@ -527,37 +527,45 @@ final class MenuBarItemImageCache: ObservableObject {
         }
     }
 
-    /// Captures images of a section's items while they're drawn in the menu
-    /// bar, for the Ice Bar to display after they're concealed. Concealed items
-    /// aren't drawn at all on macOS 27, so they can't be captured later.
+    /// Captures images of the Ice Bar's items for a section while they're
+    /// drawn in the menu bar, for the Ice Bar to display after they're
+    /// concealed. Concealed items aren't drawn at all on macOS 27, so they
+    /// can't be captured later. Returns whether every item has an image.
     @available(macOS 27.0, *)
     @MainActor
-    func captureMacOS27Images(for section: MenuBarSection.Name, onlyIfMissing: Bool) async {
-        guard
-            let appState,
-            ScreenCapture.cachedCheckPermissions(),
-            let displayID = appState.itemManager.itemCache.displayID
-        else {
-            return
+    @discardableResult
+    func captureMacOS27Images(for section: MenuBarSection.Name, onlyIfMissing: Bool) async -> Bool {
+        guard let appState else {
+            logger.error("Ice Bar capture skipped: the image cache isn't set up yet")
+            return false
         }
-        let items = appState.itemManager.itemCache.managedItems(for: section)
+        guard ScreenCapture.cachedCheckPermissions() else {
+            return false
+        }
+        guard let displayID = appState.itemManager.itemCache.displayID else {
+            logger.notice("Ice Bar capture skipped: no display for the item cache")
+            return false
+        }
+        let items = appState.menuBarManager.iceBarItems(for: section)
         guard !items.isEmpty else {
-            return
+            return true
         }
         if onlyIfMissing, items.allSatisfy({ images[$0.tag] != nil }) {
-            return
+            return true
         }
         let result = await captureMacOS27Images(of: items, displayID: displayID)
-        guard !result.images.isEmpty else {
-            return
+        if !result.images.isEmpty {
+            var updatedImages = images
+            updatedImages.merge(result.images) { old, new in
+                CapturedImage.isVisuallyEqual(old, new) ? old : new
+            }
+            if updatedImages != images {
+                images = updatedImages
+            }
         }
-        var updatedImages = images
-        updatedImages.merge(result.images) { old, new in
-            CapturedImage.isVisuallyEqual(old, new) ? old : new
-        }
-        if updatedImages != images {
-            images = updatedImages
-        }
+        let missing = items.filter { images[$0.tag] == nil }
+        logger.notice("Ice Bar capture (\(section.logString, privacy: .public)): \(result.images.count, privacy: .public) captured, \(missing.count, privacy: .public) of \(items.count, privacy: .public) without an image")
+        return missing.isEmpty
     }
 
     /// Updates the cache for the given sections, if necessary.

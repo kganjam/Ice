@@ -63,7 +63,13 @@ where MenuBarAgent draws it, and conceals them again once its menu closes.
 API. One Retina screenshot of the menu bar strip is cropped using fresh AX frames,
 and the glyph is separated from the bar's background. Concealed items aren't
 drawn, so Ice Bar images are captured just before concealing and whenever items
-are revealed. Screen Recording is only needed for these images.
+are revealed. Screen Recording is only needed for these images. The image cache
+is set up before the first item scan, so the capture before the first conceal
+at launch works (before 0.12.0-macos27.129 it was skipped, and every tile showed
+its app's icon until Layout or an Ice Bar click revealed the items). An item
+registered after the conceal (an app started after Ice) was never drawn: the
+first time the Ice Bar opens with such a tile, Ice reveals the items for about
+half a second to capture it, once per item.
 
 ## Hardening in this branch
 
@@ -86,6 +92,12 @@ are revealed. Screen Recording is only needed for these images.
 Set `defaults write com.jordanbaird.Ice DebugDumpMacOS27Glyphs -bool true` to
 write menu bar captures, per-item crops and their frames to
 `~/Library/Caches/com.jordanbaird.Ice/GlyphDebug`.
+
+Useful log lines (`/usr/bin/log show --predicate 'subsystem == "com.jordanbaird.Ice"'`):
+`Ice Bar capture (hidden): N captured, M of K without an image` before each
+conceal, `Concealing; allowed apps: …`, `Apps in the visible section: …` when
+that memory changes, and the `runs from … but LaunchServices resolves it to …`
+warning described under the assessment mode.
 
 ## Building
 
@@ -120,6 +132,8 @@ xcrun swiftc -O Ice/MenuBar/MenuBarItems/MacOS27NativeBoundary.swift \
   Tests/NativeMenuBarBoundaryTests.swift -o /tmp/ice-boundary-tests && /tmp/ice-boundary-tests
 xcrun swiftc -O Ice/MenuBar/LayoutBar/MenuBarGlyphImage.swift \
   Tests/MenuBarGlyphImageTests.swift -o /tmp/ice-glyph-image-tests && /tmp/ice-glyph-image-tests
+xcrun swiftc -O -parse-as-library Ice/MenuBar/MenuBarItems/MacOS27DynamicItemState.swift \
+  Tests/MacOS27DynamicItemStateTests.swift -o /tmp/ice-dynamic-item-tests && /tmp/ice-dynamic-item-tests
 ```
 
 ## Attribution
@@ -183,9 +197,29 @@ lifts the assertion, so click-through stays live. The assertion dies with
 Ice. Only nine system items survive an assertion (battery, Bluetooth,
 clock, displays, keyboard brightness, sound, Wi‑Fi, screen mirroring,
 Control Center); Spotlight, user switching, Siri and the like are hidden
-with the rest. The allow-list is matched through LaunchServices, so an app
-run from outside /Applications (a DerivedData build) is hidden even when
-listed.
+with the rest.
+
+The allow-list holds bundle identifiers only (`VisibilityRestrictionAllowList
+.allowing(systemItems:bundleIdentifiers:)` in MenuBarClientCore). MenuBarAgent
+names a status item's app by bundle identifier only for the copy that
+LaunchServices resolves the identifier to; any other copy is tracked by its
+executable path (an `adhocBinary` in Control Center's `trackedApplications`
+record), and an assertion removes it even though its identifier is allowed.
+Seen with AudioAnchor run from Xcode's DerivedData while a byte-identical copy
+sat in /Applications: `urlForApplication(withBundleIdentifier:)` returned the
+/Applications copy. Ice logs `<id> runs from <path>, but LaunchServices
+resolves it to <path>` once per copy and lists that app's visible items in the
+Ice Bar, so they stay reachable. To keep the app on the bar, run the copy
+LaunchServices resolves (and point its login item at that copy).
+
+The allow-list is Ice, `MacOS27AssessmentAlwaysAllowed`, the apps of the
+visible section's items, and every app remembered as having a visible item
+(`visibleApps` in `MacOS27MenuBarController.layout.v3`). That memory is per
+app, so it outlives runtime item identities: an app restarted while items are
+concealed has a new identity, and its item is drawn (and so enumerated and
+classified) only if the app is still allowed. Before 0.12.0-macos27.129 such
+an app dropped out of the allow-list and stayed hidden until Layout was opened.
+An app leaves the memory when none of its items is in the visible section.
 
 Apps Ice cannot enumerate (no `AXExtrasMenuBar`: Parallels Desktop,
 MacMixer) never reach the visible section, so an assertion removes them.
@@ -197,7 +231,10 @@ to the VM process (`com.parallels.vm`), not `com.parallels.desktop.console`.
 ### Item identity
 
 An item's persisted identity is its accessibility identifier, or a
-per-session runtime identity when it has none. OneDrive exposes its tooltip
+per-session runtime identity when it has none. Runtime identities change
+whenever Ice or the app starts; the Ice Bar's tile order
+(`MacOS27IceBarOrder`) stores them as app plus ordinal
+(`<bundle id>:Ice.RuntimeItem@<n>`), so the order survives restarts. OneDrive exposes its tooltip
 as the identifier ("OneDrive — Personal\nLooking for changes…"), so only
 the first line is used; earlier layouts with one entry per status text are
 collapsed on the next scan.

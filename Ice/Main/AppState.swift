@@ -70,8 +70,13 @@ final class AppState: ObservableObject {
 
         appearanceManager.performSetup(with: self)
         hidEventManager.performSetup(with: self)
-        await itemManager.performSetup(with: self)
+        // Before the item manager: its first item cache triggers the first
+        // visibility sync, which on macOS 27 captures the Ice Bar's images
+        // just before concealing the hidden section. A cache without
+        // `appState` skipped that capture, so every tile fell back to its
+        // app's icon until Layout or an Ice Bar click revealed the items.
         imageCache.performSetup(with: self)
+        await itemManager.performSetup(with: self)
         updatesManager.performSetup(with: self)
         userNotificationManager.performSetup(with: self)
 

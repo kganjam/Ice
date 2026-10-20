@@ -14,6 +14,9 @@ final class MacOS27MenuBarController {
     private struct StoredLayout: Codable, Equatable {
         var assignments = [String: MenuBarSection.Name]()
         var order = [MenuBarSection.Name: [String]]()
+        /// Bundle identifiers of apps with an item in the visible section.
+        /// Unlike runtime assignments, kept across Ice launches.
+        var visibleApps: Set<String>?
     }
 
     // v3 discards layouts that included Ice's own visible control item. The Ice
@@ -186,6 +189,7 @@ final class MacOS27MenuBarController {
             }
         }
         lastManagedItems = Array(itemsByIdentifier.values)
+        rememberVisibleApps(in: itemsByIdentifier)
 
         var cache = MenuBarItemManager.ItemCache(displayID: displayID)
         let liveIdentifiers = Set(liveItems.map { $0.tag.persistentIdentifier })
@@ -484,6 +488,28 @@ final class MacOS27MenuBarController {
             namespace: namespace,
             launchTime: app.launchDate?.timeIntervalSinceReferenceDate
         )
+    }
+
+    /// Apps with an item in the visible section, including apps whose items
+    /// can't be enumerated right now (quit, restarting, or not drawn).
+    var rememberedVisibleApps: Set<String> {
+        layout.visibleApps ?? []
+    }
+
+    private func rememberVisibleApps(in itemsByIdentifier: [String: MenuBarItem]) {
+        var observed = [String: Bool]()
+        for (identifier, item) in itemsByIdentifier where !item.isControlItem {
+            guard let app = knownBundleIdentifiers[identifier] ?? bundleIdentifier(for: item) else {
+                continue
+            }
+            let isVisible = layout.assignments[identifier, default: .visible] == .visible
+            observed[app] = observed[app, default: false] || isVisible
+        }
+        let updated = MacOS27VisibleApps.updated(layout.visibleApps ?? [], observed: observed)
+        if updated != layout.visibleApps ?? [] {
+            logger.notice("Apps in the visible section: \(updated.sorted().joined(separator: ","), privacy: .public)")
+        }
+        layout.visibleApps = updated
     }
 
     private func persist() {

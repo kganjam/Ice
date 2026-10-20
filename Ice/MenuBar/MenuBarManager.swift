@@ -83,6 +83,16 @@ final class MenuBarManager: ObservableObject {
     private var needsUserActionToAlignBoundary = false
     /// The number of active temporary reveals of items concealed for the Ice Bar.
     private var iceBarRevealDepth = 0
+    /// Bumped by every assessment-mode decision, so a conceal that waited for
+    /// the Ice Bar's images doesn't override a newer reveal.
+    private var assessmentDecision: UInt64 = 0
+    /// Apps in the visible section that MenuBarAgent can't keep on the bar
+    /// during an assessment-mode assertion. The Ice Bar lists their items.
+    @Published private(set) var appsHiddenDespiteVisibleSection = Set<String>()
+    /// Ice Bar tiles a reveal already tried to capture. An item macOS keeps
+    /// in its own overflow is never drawn, and must not cause a reveal every
+    /// time the Ice Bar opens.
+    private var missingImageCaptureAttempts = Set<MenuBarItemTag>()
 
     /// The managed sections in the menu bar.
     let sections = [
@@ -165,6 +175,7 @@ final class MenuBarManager: ObservableObject {
         nativeHiding.setHidden(false, section: .alwaysHidden, anchorPosition: controlPosition, screen: screen)
         let hidden = hideHidden && !macOS27Controller.isLayoutEditing
         macOS27Controller.isConcealingItems = hidden
+        assessmentDecision &+= 1
         guard hidden else {
             assessmentMode.reveal()
             logNativeVisibilityDecision("assessment mode: revealed")
@@ -172,20 +183,82 @@ final class MenuBarManager: ObservableObject {
         }
         var allowed: Set<String> = [Constants.bundleIdentifier]
         allowed.formUnion(MacOS27AssessmentMode.alwaysAllowedBundleIDs)
+        var notKeepable = Set<String>()
         for item in cache[.visible] where !item.isControlItem {
-            let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID)
-            if let id = app?.bundleIdentifier { allowed.insert(id) }
+            guard let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID),
+                  let id = app.bundleIdentifier else { continue }
+            allowed.insert(id)
+            if !assessmentMode.canKeepOnBar(app) { notKeepable.insert(id) }
+        }
+        // An app restarted while concealed has no enumerated item until it
+        // is drawn, and it is only drawn if it is already allowed.
+        allowed.formUnion(macOS27Controller.rememberedVisibleApps)
+        if appsHiddenDespiteVisibleSection != notKeepable {
+            appsHiddenDespiteVisibleSection = notKeepable
         }
         logNativeVisibilityDecision("assessment mode: concealing all but \(allowed.sorted().joined(separator: ","))")
+        let decision = assessmentDecision
         Task { [weak self] in
             guard let self else { return }
             // Concealed items aren't drawn, so the Ice Bar can only show
             // images captured while they are still on the bar. Without this
             // every tile fell back to the app icon after a display change.
             if let appState, appState.settings.general.useIceBar, !assessmentMode.isConcealing {
-                await appState.imageCache.captureMacOS27Images(for: .hidden, onlyIfMissing: true)
+                if await !appState.imageCache.captureMacOS27Images(for: .hidden, onlyIfMissing: true) {
+                    // At launch or login MenuBarAgent may still be laying
+                    // items out; one more try before they're concealed.
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard decision == assessmentDecision else { return }
+                    await appState.imageCache.captureMacOS27Images(for: .hidden, onlyIfMissing: true)
+                }
+                // A reveal (Layout, an Ice Bar click) may have come meanwhile.
+                guard decision == assessmentDecision else { return }
             }
             await assessmentMode.conceal(allowing: allowed)
+        }
+    }
+
+    /// The items the Ice Bar lists for `section`. On macOS 27 the hidden
+    /// section's list also has the visible-section items that MenuBarAgent
+    /// removes anyway (`appsHiddenDespiteVisibleSection`), so they stay
+    /// reachable.
+    func iceBarItems(for section: MenuBarSection.Name) -> [MenuBarItem] {
+        guard let cache = appState?.itemManager.itemCache else { return [] }
+        let items = cache.managedItems(for: section)
+        guard section == .hidden, !appsHiddenDespiteVisibleSection.isEmpty else { return items }
+        return items + cache.managedItems(for: .visible).filter { item in
+            guard !item.isControlItem,
+                  let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID),
+                  let id = app.bundleIdentifier else { return false }
+            return appsHiddenDespiteVisibleSection.contains(id)
+        }
+    }
+
+    /// Items registered after the section was concealed were never drawn, so
+    /// their Ice Bar tiles fall back to the app's icon. When the Ice Bar opens
+    /// with such tiles, reveal the items for a moment and capture them, once
+    /// per item.
+    @available(macOS 27.0, *)
+    func captureMissingIceBarImages(for section: MenuBarSection.Name) {
+        guard let appState, iceBarRevealDepth == 0, !macOS27Controller.isLayoutEditing,
+              ScreenCapture.cachedCheckPermissions() else { return }
+        // Disallowed apps aren't laid out at all; a reveal doesn't draw them.
+        if MacOS27DisallowedAppsMode.isEnabled, !MacOS27AssessmentMode.isEnabled { return }
+        let missing = iceBarItems(for: section).filter {
+            appState.imageCache.images[$0.tag] == nil && !missingImageCaptureAttempts.contains($0.tag)
+        }
+        guard !missing.isEmpty else { return }
+        if missingImageCaptureAttempts.count > 512 { missingImageCaptureAttempts.removeAll() }
+        missingImageCaptureAttempts.formUnion(missing.map(\.tag))
+        logger.notice("Ice Bar: \(missing.count, privacy: .public) tiles have no image; revealing to capture them")
+        Task { [weak self] in
+            guard let self else { return }
+            beginIceBarReveal()
+            defer { endIceBarReveal() }
+            for delay in [350, 450, 600] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                if await appState.imageCache.captureMacOS27Images(for: section, onlyIfMissing: false) { break }
+            }
         }
     }
 
@@ -212,8 +285,10 @@ final class MenuBarManager: ObservableObject {
                 guard let id = app?.bundleIdentifier, id != Constants.bundleIdentifier else { return nil }
                 return id
             }
-            // Everything in the visible section stays allowed.
+            // Everything in the visible section stays allowed, including
+            // apps whose items aren't enumerated right now.
             let visibleApps = Set(cache[.visible].compactMap(bundleID))
+                .union(macOS27Controller.rememberedVisibleApps)
             // Enumerated hidden items, apps already disallowed (no longer
             // enumerated), and every running app the record knows about
             // whose item Ice cannot enumerate (Passwords, helpers): if it is
