@@ -39,6 +39,18 @@ struct MenuBarLayoutSettingsPane: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 4)
+                Label("Dimmed items are drawn by macOS itself (Sound, Now Playing, Wi‑Fi…). Ice can't drag them; ⌘-drag them in the menu bar. Hover over an item for details.", systemImage: "lock")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
+                if MacOS27AssessmentMode.isEnabled {
+                    Label("While Ice hides items, macOS keeps only \(MacOS27SystemItems.keptWhileConcealedNames) on the bar. Other system items in Visible, such as Now Playing, are listed in the Ice Bar then.", systemImage: "eye.slash")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 4)
+                }
             }
         }
         .task(id: refreshID) {

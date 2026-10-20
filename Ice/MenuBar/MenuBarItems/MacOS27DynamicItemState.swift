@@ -195,3 +195,35 @@ struct MacOS27LayoutOwnerRegistry<Namespace: Hashable> {
         return (Set(owners.intersection(runningOwners).map(\.pid)), namespaces)
     }
 }
+
+/// MenuBarAgent's own items (namespace `com.apple.controlcenter`) under an
+/// assessment-mode assertion. MenuBarClientCore's `MBSystemItemIdentifier`
+/// has exactly nine cases on 27.0 (battery, bluetooth, keyboardBrightness,
+/// clock, displays, screenMirroring, volume, wifi, controlCenter); the
+/// assertion keeps those and removes every other MenuBarAgent item, such as
+/// Now Playing, user switching or Focus, whatever Ice's layout says.
+enum MacOS27SystemItems {
+    /// The kept items' accessibility identifiers.
+    static let keptWhileConcealed: Set<String> = [
+        "com.apple.menuextra.battery",
+        "com.apple.menuextra.bluetooth",
+        "com.apple.menuextra.keyboard-brightness",
+        "com.apple.menuextra.clock",
+        "com.apple.menuextra.display",
+        "com.apple.menuextra.displays",
+        "com.apple.menuextra.screen-mirroring",
+        "com.apple.menuextra.sound",
+        "com.apple.menuextra.wifi",
+        "com.apple.menuextra.controlcenter",
+    ]
+
+    /// The kept items as the Layout editor names them.
+    static let keptWhileConcealedNames =
+        "battery, Bluetooth, clock, displays, keyboard brightness, sound, Wi‑Fi, screen mirroring and Control Center"
+
+    /// Whether the MenuBarAgent item with this accessibility identifier stays
+    /// on the bar while an assertion is live.
+    static func isKeptWhileConcealed(_ identifier: String) -> Bool {
+        keptWhileConcealed.contains(identifier) || identifier.hasPrefix("BentoBox")
+    }
+}

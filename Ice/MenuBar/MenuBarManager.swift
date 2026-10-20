@@ -86,9 +86,10 @@ final class MenuBarManager: ObservableObject {
     /// Bumped by every assessment-mode decision, so a conceal that waited for
     /// the Ice Bar's images doesn't override a newer reveal.
     private var assessmentDecision: UInt64 = 0
-    /// Apps in the visible section that MenuBarAgent can't keep on the bar
-    /// during an assessment-mode assertion. The Ice Bar lists their items.
-    @Published private(set) var appsHiddenDespiteVisibleSection = Set<String>()
+    /// Visible-section items that MenuBarAgent removes anyway during an
+    /// assessment-mode assertion: MenuBarAgent items other than the nine it
+    /// keeps, and items of an app copy it can't match. The Ice Bar lists them.
+    @Published private(set) var itemsHiddenDespiteVisibleSection = Set<MenuBarItemTag>()
     /// Ice Bar tiles a reveal already tried to capture. An item macOS keeps
     /// in its own overflow is never drawn, and must not cause a reveal every
     /// time the Ice Bar opens.
@@ -170,12 +171,34 @@ final class MenuBarManager: ObservableObject {
     /// the visible section's apps on the bar; MenuBarAgent removes the rest
     /// live. An Ice Bar reveal lifts the assertion (also live).
     @available(macOS 27.0, *)
-    private func applyAssessmentMode(hideHidden: Bool, screen: NSScreen, controlPosition: CGFloat, cache: MenuBarItemManager.ItemCache) {
+    private func applyAssessmentMode(
+        hideHidden: Bool,
+        screen: NSScreen,
+        controlPosition: CGFloat,
+        alwaysHiddenAnchor: CGFloat?,
+        cache: MenuBarItemManager.ItemCache
+    ) {
+        assessmentDecision &+= 1
+        if macOS27Controller.isLayoutEditing {
+            // Layout shows every item. Its moves are native drags that place
+            // items relative to Ice's boundary spacer, which this mode never
+            // shows otherwise; without it every Layout move failed ("Can't
+            // find Ice's items … boundary: false").
+            assessmentMode.reveal()
+            macOS27Controller.isConcealingItems = false
+            if macOS27Controller.isReorderInProgress {
+                nativeHiding.showForLayout(anchorPosition: controlPosition, alwaysHiddenAnchor: alwaysHiddenAnchor)
+            } else {
+                nativeHiding.setHidden(false, section: .hidden, anchorPosition: controlPosition, screen: screen)
+                nativeHiding.setHidden(false, section: .alwaysHidden, anchorPosition: controlPosition, screen: screen)
+            }
+            logNativeVisibilityDecision("assessment mode: revealed for Layout (reordering: \(macOS27Controller.isReorderInProgress))")
+            return
+        }
         nativeHiding.setHidden(false, section: .hidden, anchorPosition: controlPosition, screen: screen)
         nativeHiding.setHidden(false, section: .alwaysHidden, anchorPosition: controlPosition, screen: screen)
-        let hidden = hideHidden && !macOS27Controller.isLayoutEditing
+        let hidden = hideHidden
         macOS27Controller.isConcealingItems = hidden
-        assessmentDecision &+= 1
         guard hidden else {
             assessmentMode.reveal()
             logNativeVisibilityDecision("assessment mode: revealed")
@@ -183,18 +206,21 @@ final class MenuBarManager: ObservableObject {
         }
         var allowed: Set<String> = [Constants.bundleIdentifier]
         allowed.formUnion(MacOS27AssessmentMode.alwaysAllowedBundleIDs)
-        var notKeepable = Set<String>()
+        var notKept = Set<MenuBarItemTag>()
         for item in cache[.visible] where !item.isControlItem {
+            if item.tag.namespace == .controlCenter, !MacOS27SystemItems.isKeptWhileConcealed(item.tag.title) {
+                notKept.insert(item.tag)
+            }
             guard let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID),
                   let id = app.bundleIdentifier else { continue }
             allowed.insert(id)
-            if !assessmentMode.canKeepOnBar(app) { notKeepable.insert(id) }
+            if !assessmentMode.canKeepOnBar(app) { notKept.insert(item.tag) }
         }
         // An app restarted while concealed has no enumerated item until it
         // is drawn, and it is only drawn if it is already allowed.
         allowed.formUnion(macOS27Controller.rememberedVisibleApps)
-        if appsHiddenDespiteVisibleSection != notKeepable {
-            appsHiddenDespiteVisibleSection = notKeepable
+        if itemsHiddenDespiteVisibleSection != notKept {
+            itemsHiddenDespiteVisibleSection = notKept
         }
         logNativeVisibilityDecision("assessment mode: concealing all but \(allowed.sorted().joined(separator: ","))")
         let decision = assessmentDecision
@@ -220,18 +246,37 @@ final class MenuBarManager: ObservableObject {
 
     /// The items the Ice Bar lists for `section`. On macOS 27 the hidden
     /// section's list also has the visible-section items that MenuBarAgent
-    /// removes anyway (`appsHiddenDespiteVisibleSection`), so they stay
+    /// removes anyway (`itemsHiddenDespiteVisibleSection`), so they stay
     /// reachable.
     func iceBarItems(for section: MenuBarSection.Name) -> [MenuBarItem] {
         guard let cache = appState?.itemManager.itemCache else { return [] }
         let items = cache.managedItems(for: section)
-        guard section == .hidden, !appsHiddenDespiteVisibleSection.isEmpty else { return items }
-        return items + cache.managedItems(for: .visible).filter { item in
-            guard !item.isControlItem,
-                  let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID),
-                  let id = app.bundleIdentifier else { return false }
-            return appsHiddenDespiteVisibleSection.contains(id)
+        guard section == .hidden, !itemsHiddenDespiteVisibleSection.isEmpty else { return items }
+        return items + cache.managedItems(for: .visible).filter {
+            itemsHiddenDespiteVisibleSection.contains($0.tag)
         }
+    }
+
+    /// What the Layout editor tells the user about an item it can't move, or
+    /// that macOS won't keep where the layout puts it. Empty for ordinary items.
+    func layoutNotes(for item: MenuBarItem) -> [String] {
+        guard #available(macOS 27.0, *) else { return [] }
+        let name = item.displayName
+        var notes = [String]()
+        if MenuBarItemTag.immovableItems.contains(item.tag) {
+            notes.append("macOS doesn't let \(name) be moved.")
+        } else if item.tag.namespace == .controlCenter {
+            notes.append("macOS draws \(name) itself, and Ice doesn't drag items macOS draws: synthetic drags of them crashed MenuBarAgent in testing. To move it, hold ⌘ and drag it in the menu bar.")
+        }
+        guard MacOS27AssessmentMode.isEnabled, MenuBarAssessmentAssertion27.isAvailable else { return notes }
+        let isVisible = appState?.itemManager.itemCache.address(for: item.tag)?.section == .visible
+        if item.tag.namespace == .controlCenter, !MacOS27SystemItems.isKeptWhileConcealed(item.tag.title) {
+            notes.append("While Ice hides items, macOS keeps only \(MacOS27SystemItems.keptWhileConcealedNames) on the bar, so \(name) is hidden then\(isVisible ? " and listed in the Ice Bar" : ""), wherever it sits.")
+        } else if let app = item.sourceApplication ?? NSRunningApplication(processIdentifier: item.ownerPID),
+                  let copy = assessmentMode.launchServicesCopy(ifNot: app) {
+            notes.append("This copy of \(app.localizedName ?? name) runs from \(app.bundleURL?.path ?? "?"), but macOS knows the app as \(copy.path) and keeps only that copy on the bar while Ice hides items, so this one is hidden then\(isVisible ? " and listed in the Ice Bar" : "").")
+        }
+        return notes
     }
 
     /// Items registered after the section was concealed were never drawn, so
@@ -338,7 +383,13 @@ final class MenuBarManager: ObservableObject {
         }
 
         if MacOS27AssessmentMode.isEnabled, MenuBarAssessmentAssertion27.isAvailable {
-            applyAssessmentMode(hideHidden: hideHidden, screen: screen, controlPosition: controlPosition, cache: cache)
+            applyAssessmentMode(
+                hideHidden: hideHidden,
+                screen: screen,
+                controlPosition: controlPosition,
+                alwaysHiddenAnchor: section(withName: .alwaysHidden)?.isEnabled == true ? alwaysAnchor : nil,
+                cache: cache
+            )
             return
         }
 

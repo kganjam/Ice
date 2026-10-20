@@ -146,8 +146,8 @@ final class LayoutBarItemView: NSView {
         super.init(frame: CGRect(origin: .zero, size: Self.fallbackSize(for: item)))
         unregisterDraggedTypes()
 
-        self.toolTip = item.displayName
         self.isEnabled = item.isMovable
+        self.toolTip = layoutToolTip(for: item)
         setAccessibilityElement(true)
         setAccessibilityLabel(item.displayName)
         setAccessibilityHelp("Drag to reorder this menu bar item")
@@ -203,7 +203,7 @@ final class LayoutBarItemView: NSView {
     func update(item: MenuBarItem) {
         precondition(self.item.tag == item.tag)
         self.item = item
-        toolTip = item.displayName
+        toolTip = layoutToolTip(for: item)
         setAccessibilityLabel(item.displayName)
         isEnabled = item.isMovable
         if cachedImage == nil {
@@ -322,11 +322,20 @@ final class LayoutBarItemView: NSView {
         }
     }
 
+    /// The item's name, followed by what macOS doesn't allow for it.
+    private func layoutToolTip(for item: MenuBarItem) -> String {
+        let notes = appState?.menuBarManager.layoutNotes(for: item) ?? []
+        return ([item.displayName] + notes).joined(separator: "\n\n")
+    }
+
     /// Provides an alert to display when the item view is disabled.
     func provideAlertForDisabledItem() -> NSAlert {
         let alert = NSAlert()
-        alert.messageText = "Menu bar item is not movable."
-        alert.informativeText = "macOS prohibits \"\(item.displayName)\" from being moved."
+        alert.messageText = "Ice can't move \"\(item.displayName)\"."
+        let notes = appState?.menuBarManager.layoutNotes(for: item) ?? []
+        alert.informativeText = notes.isEmpty
+            ? "macOS prohibits \"\(item.displayName)\" from being moved."
+            : notes.joined(separator: "\n\n")
         return alert
     }
 

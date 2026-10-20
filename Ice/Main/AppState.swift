@@ -81,6 +81,14 @@ final class AppState: ObservableObject {
         userNotificationManager.performSetup(with: self)
 
         configureCancellables()
+
+        if #available(macOS 27.0, *), UserDefaults.standard.object(forKey: MacOS27LayoutRequests.key) != nil {
+            Task {
+                // Let the first conceal and its image capture finish first.
+                try? await Task.sleep(for: .seconds(3))
+                await MacOS27LayoutRequests.applyPending(appState: self)
+            }
+        }
     }
 
     /// Performs app state setup.

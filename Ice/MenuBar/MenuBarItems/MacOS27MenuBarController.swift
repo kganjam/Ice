@@ -316,6 +316,7 @@ final class MacOS27MenuBarController {
         }
 
         snapshots[identifier] = item
+        rememberVisibleAppsAfterMove()
         sectionsWithPendingMove.formUnion([previousSection, targetSection])
         for section in Set([previousSection, targetSection]) {
             var relevantIdentifiers = Set(
@@ -360,6 +361,7 @@ final class MacOS27MenuBarController {
             layout.order[section, default: []].append(identifier)
         }
         snapshots[identifier] = item
+        rememberVisibleAppsAfterMove()
         sectionsWithPendingMove.formUnion([previousSection, section])
         for pendingSection in Set([previousSection, section]) {
             var relevantIdentifiers = Set(
@@ -494,6 +496,15 @@ final class MacOS27MenuBarController {
     /// can't be enumerated right now (quit, restarting, or not drawn).
     var rememberedVisibleApps: Set<String> {
         layout.visibleApps ?? []
+    }
+
+    /// A Layout move changes an app's section before the next enumeration;
+    /// the allow-list must follow at once.
+    private func rememberVisibleAppsAfterMove() {
+        rememberVisibleApps(in: Dictionary(
+            knownItemsForReordering().map { ($0.tag.persistentIdentifier, $0) },
+            uniquingKeysWith: { _, newer in newer }
+        ))
     }
 
     private func rememberVisibleApps(in itemsByIdentifier: [String: MenuBarItem]) {

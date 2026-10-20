@@ -114,16 +114,7 @@ final class MacOS27AssessmentMode {
     /// "adhocBinary" in Control Center's record, and an assertion removes it
     /// even though its bundle identifier is allowed. Logs each such copy once.
     func canKeepOnBar(_ app: NSRunningApplication) -> Bool {
-        let key = ProcessKey(pid: app.processIdentifier, launchDate: app.launchDate)
-        let resolved: URL?
-        if let cached = launchServicesCopies[key] {
-            resolved = cached
-        } else {
-            resolved = Self.otherLaunchServicesCopy(of: app)
-            if launchServicesCopies.count > 256 { launchServicesCopies.removeAll() }
-            launchServicesCopies[key] = resolved
-        }
-        guard let resolved else { return true }
+        guard let resolved = launchServicesCopy(ifNot: app) else { return true }
         let running = app.bundleURL?.path ?? "?"
         if reportedCopies.insert("\(app.bundleIdentifier ?? "?")|\(running)").inserted {
             logger.warning("\(app.bundleIdentifier ?? "?", privacy: .public) runs from \(running, privacy: .public), but LaunchServices resolves it to \(resolved.path, privacy: .public). MenuBarAgent can't keep this copy on the bar while Ice hides items, so the Ice Bar lists its items. Run the copy LaunchServices resolves to keep it on the bar.")
@@ -132,7 +123,18 @@ final class MacOS27AssessmentMode {
     }
 
     /// The copy LaunchServices resolves `app`'s bundle identifier to, when
-    /// `app` is a different copy.
+    /// `app` is a different copy (cached per process).
+    func launchServicesCopy(ifNot app: NSRunningApplication) -> URL? {
+        let key = ProcessKey(pid: app.processIdentifier, launchDate: app.launchDate)
+        if let cached = launchServicesCopies[key] {
+            return cached
+        }
+        let resolved = Self.otherLaunchServicesCopy(of: app)
+        if launchServicesCopies.count > 256 { launchServicesCopies.removeAll() }
+        launchServicesCopies[key] = resolved
+        return resolved
+    }
+
     private static func otherLaunchServicesCopy(of app: NSRunningApplication) -> URL? {
         guard
             let bundleID = app.bundleIdentifier,

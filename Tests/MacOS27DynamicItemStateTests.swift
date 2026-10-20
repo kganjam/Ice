@@ -91,6 +91,13 @@ enum MacOS27DynamicItemStateTests {
         visibleApps = MacOS27VisibleApps.updated(visibleApps, observed: ["a": false])
         check(visibleApps == ["b"], "an app moved out of the visible section is forgotten")
 
+        check(MacOS27SystemItems.isKeptWhileConcealed("com.apple.menuextra.sound"),
+              "an assertion keeps Sound")
+        check(!MacOS27SystemItems.isKeptWhileConcealed("com.apple.menuextra.now-playing"),
+              "an assertion removes Now Playing")
+        check(MacOS27SystemItems.keptWhileConcealed.count == 10,
+              "nine kept system items (displays under two spellings)")
+
         var grace = MacOS27MissingItemGrace()
         check(!grace.needsVerification("plugin", canObserve: true, now: 0),
               "a first expanded omission keeps the tile")

@@ -30,8 +30,10 @@ with additional hardening. Every macOS 27 path is gated on
   bar, which reflows the bar once.
 - Items that macOS keeps in its own overflow aren't drawn anywhere, so the Ice
   Bar shows their app's icon, and clicking one opens the system overflow.
-- Clock, Control Center and other items hosted by `MenuBarAgent` can't be
-  dragged from the Layout editor. You can still Command-drag them yourself.
+- Clock, Control Center and other items hosted by `MenuBarAgent` (Sound, Now
+  Playing, Wi‑Fi, …) can't be dragged from the Layout editor. You can still
+  Command-drag them yourself. Their Layout tiles are dimmed; the tooltip and
+  the alert on a click say why, per item.
 - Opening the Layout editor shows every item until you leave it.
 
 ## How it works
@@ -211,6 +213,25 @@ sat in /Applications: `urlForApplication(withBundleIdentifier:)` returned the
 resolves it to <path>` once per copy and lists that app's visible items in the
 Ice Bar, so they stay reachable. To keep the app on the bar, run the copy
 LaunchServices resolves (and point its login item at that copy).
+
+Layout moves are native Command-drags placed relative to Ice's boundary
+spacer. This mode keeps the spacer withdrawn, so before 0.12.0-macos27.130
+every Layout move failed (`Can't find Ice's items … boundary: false`, then
+`Could not reconcile macOS 27 with the final desired Layout order`). While a
+Layout move runs, the spacer is now shown one point wide, as in the spacer
+mode. MenuBarAgent items other than the nine kept ones (Now Playing, user
+switching, …) are removed by an assertion wherever they sit; the Ice Bar
+lists those that are in the visible section.
+
+Scripts and agents without Accessibility permission can request Layout moves
+through defaults (`MacOS27LayoutRequests`, applied once a few seconds after
+launch, then removed; see `MacOS27LayoutRequests.swift`):
+
+```sh
+defaults write com.jordanbaird.Ice MacOS27LayoutRequests -array \
+  '{ item = "ru.keepcoder.Telegram"; section = hidden; }' \
+  '{ item = "com.kganjam.gestalt"; leftOf = "com.parallels.desktop.console"; }'
+```
 
 The allow-list is Ice, `MacOS27AssessmentAlwaysAllowed`, the apps of the
 visible section's items, and every app remembered as having a visible item
